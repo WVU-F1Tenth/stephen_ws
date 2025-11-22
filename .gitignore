@@ -1,0 +1,23 @@
+# ROS2 build artifacts
+build/
+install/
+log/
+src/stephen/test
+
+# Python cache
+__pycache__/
+*.__pycache__
+
+# VS Code settings
+.vscode/
+src/.vscode
+
+# Output files
+gap_follow_info.txt
+path_follow_info.txt
+
+# Other
+wheelhouse/
+*.swp
+*.tmp
+.DS_Store
