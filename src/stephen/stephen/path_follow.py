@@ -315,6 +315,46 @@ class Path:
             idx = slice(pos_disp[i], )
             ranges[pos_disp[i]]
 
+    def index_extend(self, ranges):
+        global disparity_threshold
+        # Extend from direction of closer range
+        diffs = np.diff(ranges)
+        pos_disp = np.flatnonzero(diffs >= disparity_threshold)
+        neg_disp = np.flatnonzero(diffs <= -disparity_threshold)
+        pos_wall_ranges = ranges[pos_disp]
+        neg_wall_ranges = ranges[neg_disp + 1]
+        
+        index_offset = 67
+
+        # Positive extends in the positive direction starting with i + 1
+        for i in range(pos_disp.size):
+            disp = pos_disp[i]
+            wall_range = pos_wall_ranges[i]
+            # Dist_count = Index count to extend from wall
+            coeff = math.sqrt(abs(math.cos(self.index_to_angle(disp))))
+            # coeff = 1
+            dist_count = math.ceil(coeff * index_offset)
+            gap_start = disp + 1
+            if (dist_count > 0):
+                n = min(dist_count, ranges.size - gap_start)
+                idxs = slice(gap_start, gap_start + n)
+                np.minimum(ranges[idxs], wall_range, out=ranges[idxs])
+
+        # Negative extends in the negative direction starting with i
+        for i in range(neg_disp.size):
+            disp = neg_disp[i]
+            wall_range = neg_wall_ranges[i]
+            # Dist_count = Index count to extend from wall
+            coeff = math.sqrt(abs(math.cos(self.index_to_angle(disp))))
+            # coeff = 1
+            dist_count = math.ceil(coeff * index_offset)
+            gap_start = disp
+            if (dist_count > 0):
+                n = min(dist_count, gap_start)
+                idxs = slice(gap_start - n, gap_start + 1)
+                np.minimum(ranges[idxs], wall_range, out=ranges[idxs])
+
+
     def disparity_extend(self, ranges):
         global disparity_threshold
         extension = self.extension
@@ -333,7 +373,7 @@ class Path:
             ratio = np.clip(ratio, -1.0, 1.0)
             # Dist_count = Index count to extend from wall
             coeff = math.sqrt(abs(math.cos(self.index_to_angle(disp))))
-            coeff = 1
+            # coeff = 1
             dist_count = math.ceil(coeff * 2 * math.asin(ratio) / self.increment)
             gap_start = disp + 1
             if (dist_count > 0):
