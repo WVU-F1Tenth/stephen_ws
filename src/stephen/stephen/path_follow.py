@@ -306,47 +306,57 @@ class Path:
 
         return col_mins
     
-    def get_disparity_section(self, point):
-        pass
-    
     def disparity_extend2(self, ranges, extensions):
 
-        # FINDING DISP TO EXTEND
-        # for each disp:
-        #   original_ext = extend(disp)
-        #   points = points in negative direction from disp to X
-        #   exts = [extend(point) for point in points]
-        #   best_ext_point = max([angle(ext, original_ext) for extt in exts])
-        #
-        # SIMULATING USING WALL EXTEND
-        # for each disp:
-        #   for i from disp idx to (ext[i] > disp):
-        #       ranges[i] = ext[i]
+        # Maybe use min gap because not all points extended (wall of curvature)
 
         # Disparitity series could overwrite to me extension further back
 
-        # Check i bounds
-
         global disparity_threshold
         diffs = np.diff(ranges)
+        # Disps are wall points
         pos_disp = np.flatnonzero(diffs >= disparity_threshold)
         neg_disp = np.flatnonzero(diffs <= -disparity_threshold) + 1
 
         for disp in pos_disp:
+            # Walk gap until intersection
             disp_range = ranges[disp]
-            intersects = np.flatnonzero(extensions[disp:] > disp_range)
-            if intersects.size:
-                intersect = intersects[0] + disp - 1
-                new_ext = extensions[intersect]
-                ranges[disp: intersect + 1] = new_ext
+            points = np.flatnonzero((ranges[disp+1:] <= disp_range) | (extensions[disp+1:] > disp_range))
+            if points.size:
+                left_intersect = points[0] + disp+1
+            else:
+                continue
+            # Drop to intersection range
+            if extensions[left_intersect] > disp_range:
+                new_ext = extensions[left_intersect-1]
+            else:
+                new_ext = ranges[left_intersect]
+            # Backtrack until second intersection
+            points = np.flatnonzero((ranges[:disp] <= new_ext) | (extensions[:disp] > new_ext))
+            right_intersect = points[-1] if points.size else disp
+            if extensions[right_intersect] > new_ext:
+                right_intersect += 1
+            ranges[right_intersect: left_intersect + 1] = new_ext
 
         for disp in neg_disp:
+            # Walk gap until intersection
             disp_range = ranges[disp]
-            intersects = np.flatnonzero(extensions[:disp] > disp_range)
-            if intersects.size:
-                intersect = intersects[-1] + 1
-                new_ext = extensions[intersect]
-                ranges[intersect: disp + 1] = new_ext
+            points = np.flatnonzero((ranges[:disp] <= disp_range) | (extensions[:disp] > disp_range))
+            if points.size:
+                right_intersect = points[-1]
+            else:
+                continue
+            # Drop to intersection range
+            if extensions[right_intersect] > disp_range:
+                new_ext = extensions[right_intersect+1]
+            else:
+                new_ext = ranges[right_intersect]
+            # Backtrack until second intersection
+            points = np.flatnonzero((ranges[disp+1:] <= new_ext) | (extensions[disp+1:] > new_ext))
+            left_intersect = points[0] + disp + 1 if points.size else disp
+            if extensions[left_intersect] > new_ext:
+                left_intersect -= 1
+            ranges[right_intersect: left_intersect + 1] = new_ext
 
     def index_extend(self, ranges):
         global disparity_threshold
