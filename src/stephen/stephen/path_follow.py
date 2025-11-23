@@ -34,8 +34,9 @@ import threading
 # - Create custom maps for sim
 # - Create tracking line for sim to compare paths
 
-is_simulation = True
+publish_marker = True
 publish_virtual_scan = True
+publish_v2 = True
 file_output = True
 fast_print = False
 
@@ -57,15 +58,16 @@ class PathFollow(Node):
     def __init__(self):
         super().__init__('gap_follow')
         signal.signal(signal.SIGINT, handler)
-        if is_simulation:
+        if publish_marker:
             self.laser_scan_sub = self.create_subscription(LaserScan, '/scan', self.save_scan, 10)
         else:
             self.laser_scan_sub = self.create_subscription(LaserScan, '/scan', self.adjust, 10)
         self.drive_pub = self.create_publisher(AckermannDriveStamped, '/drive', 10)
         if publish_virtual_scan:
             self.scan_pub = self.create_publisher(LaserScan, '/virtual_scan', 10)
+        if publish_v2:
             self.v2_pub = self.create_publisher(Float32MultiArray, '/v2_ranges', 10)
-        if is_simulation:
+        if publish_marker:
             self.marker_pub = self.create_publisher(Marker, '/viz/projected_line', 10)
             self.timer = self.create_timer(0.025, self.adjust_wrapper)
         self.overhead_start = 0.0
@@ -181,11 +183,7 @@ class PathFollow(Node):
         #self.path.apply_range_limit(ranges, 10.0)
 
         extensions = self.path.get_wall_extensions(ranges)
-        msg = Float32MultiArray()
-        msg.data = extensions.tolist()
-        self.v2_pub.publish(msg)
-
-        self.path.disparity_extend(ranges)
+        self.path.disparity_extend2(ranges, extensions)
         
         pos_disp, neg_disp = self.path.disparities(ranges)
         pos_starts, neg_starts = pos_disp + 1, neg_disp
@@ -213,15 +211,20 @@ class PathFollow(Node):
         self.prev_steering_angle = steering_angle
 
         # Publish messages
-        if publish_virtual_scan:
-            self.scan_pub.publish(scan)
-
         drive_msg = AckermannDriveStamped()
         drive_msg.drive.steering_angle = steering_angle
         drive_msg.drive.speed = speed
         self.drive_pub.publish(drive_msg)
 
-        if (is_simulation):
+        if publish_virtual_scan:
+            self.scan_pub.publish(scan)
+
+        if publish_v2:
+            msg = Float32MultiArray()
+            msg.data = extensions.tolist()
+            self.v2_pub.publish(msg)
+
+        if (publish_marker):
             # Marker
             L = 20.0
             front_offset = 0.4
@@ -300,20 +303,50 @@ class Path:
         range_matrix = np.where(mask, ranges[:, None], np.inf).astype(np.float32)
 
         col_mins = range_matrix.min(axis=0)
+
         return col_mins
     
-    def disparity_extend2(self, ranges):
+    def get_disparity_section(self, point):
+        pass
+    
+    def disparity_extend2(self, ranges, extensions):
+
+        # FINDING DISP TO EXTEND
+        # for each disp:
+        #   original_ext = extend(disp)
+        #   points = points in negative direction from disp to X
+        #   exts = [extend(point) for point in points]
+        #   best_ext_point = max([angle(ext, original_ext) for extt in exts])
+        #
+        # SIMULATING USING WALL EXTEND
+        # for each disp:
+        #   for i from disp idx to (ext[i] > disp):
+        #       ranges[i] = ext[i]
+
+        # Disparitity series could overwrite to me extension further back
+
+        # Check i bounds
+
         global disparity_threshold
-        # Extend from direction of closer range
         diffs = np.diff(ranges)
         pos_disp = np.flatnonzero(diffs >= disparity_threshold)
-        neg_disp = np.flatnonzero(diffs <= -disparity_threshold)
-        disps = np.concatenate(pos_disp, neg_disp)
-        extensions = self.get_wall_extensions(ranges)
+        neg_disp = np.flatnonzero(diffs <= -disparity_threshold) + 1
 
-        for i in range(pos_disp.size):
-            idx = slice(pos_disp[i], )
-            ranges[pos_disp[i]]
+        for disp in pos_disp:
+            disp_range = ranges[disp]
+            intersects = np.flatnonzero(extensions[disp:] > disp_range)
+            if intersects.size:
+                intersect = intersects[0] + disp - 1
+                new_ext = extensions[intersect]
+                ranges[disp: intersect + 1] = new_ext
+
+        for disp in neg_disp:
+            disp_range = ranges[disp]
+            intersects = np.flatnonzero(extensions[:disp] > disp_range)
+            if intersects.size:
+                intersect = intersects[-1] + 1
+                new_ext = extensions[intersect]
+                ranges[intersect: disp + 1] = new_ext
 
     def index_extend(self, ranges):
         global disparity_threshold
@@ -372,8 +405,8 @@ class Path:
             ratio = extension/(2*wall_range)
             ratio = np.clip(ratio, -1.0, 1.0)
             # Dist_count = Index count to extend from wall
-            coeff = math.sqrt(abs(math.cos(self.index_to_angle(disp))))
-            # coeff = 1
+            # coeff = math.sqrt(abs(math.cos(self.index_to_angle(disp))))
+            coeff = 1
             dist_count = math.ceil(coeff * 2 * math.asin(ratio) / self.increment)
             gap_start = disp + 1
             if (dist_count > 0):
@@ -388,8 +421,8 @@ class Path:
             ratio = extension/(2*wall_range)
             ratio = np.clip(ratio, -1.0, 1.0)
             # Dist_count = Index count to extend from wall
-            coeff = math.sqrt(abs(math.cos(self.index_to_angle(disp))))
-            # coeff = 1
+            # coeff = math.sqrt(abs(math.cos(self.index_to_angle(disp))))
+            coeff = 1
             dist_count = math.ceil(coeff * 2 * math.asin(ratio) / self.increment)
             gap_start = disp
             if (dist_count > 0):
@@ -495,15 +528,16 @@ class Path:
         if width > 0: sign = 1
         elif width < 0: sign = -1
         else: raise ValueError('Invalid path steering length of 0')
-        if self.steering_extension > 2 * depth: # Validate asin domain
-            return 0.0
-        ext_index_width = round(2 * math.asin(self.steering_extension / (2 * depth)) / self.increment)
+        # if self.steering_extension > 2 * depth: # Validate asin domain
+        #     return 0.0
+        # ext_index_width = round(2 * math.asin(self.steering_extension / (2 * depth)) / self.increment)
         index_width = round(2 * math.asin(abs(width) / (2 * depth)) / self.increment)
         if self.steering_method == 'center':
             steering_idx = start + (sign * index_width / 2)
             steering_angle = self.index_to_angle(steering_idx)
         elif self.steering_method == 'disparity':
-            steering_idx = start + sign * ext_index_width
+            # steering_idx = start + sign * ext_index_width
+            steering_idx = start
             steering_angle = self.index_to_angle(steering_idx)
         else:
             raise ValueError('Invalid steering method')

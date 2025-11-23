@@ -30,7 +30,7 @@ class ScanVisual(Node):
         self.line_width = 4 # Pixels
         self.scan_color = (.8, .8, .8, 1.)
         self.disparity_color = (1.0, 0.2, 0.2, 1.0)
-        self.virtual_color = (0.0, 1.0, 0.2, 1.0)
+        self.virtual_color = (0.0, 1.0, 0.2, 0.5)
         self.steering_color = (0.4, 0.4, 1.0, 1.0)
         self.v2_color = (1.0, 0.6, 0.2, 1.0)
 
@@ -67,7 +67,7 @@ class ScanVisual(Node):
         self.pos[-1] = (0,0)
         self.line = Line(pos=self.pos, color=self.colors, width=self.line_width, method='gl', connect='strip')
         self.line.set_gl_state(depth_test=False, blend=True)
-        self.line.order = 2.0
+        self.line.order = 3.0
         view.add(self.line)
 
         # Virtual Scan
@@ -81,7 +81,7 @@ class ScanVisual(Node):
         self.virtual_line = Line(pos=self.virtual_pos, color=self.virtual_colors,
                                   width=self.line_width, method='gl', connect='strip')
         self.virtual_line.set_gl_state(depth_test=False, blend=True)
-        self.virtual_line.order = 3.0
+        self.virtual_line.order = 2.0
         view.add(self.virtual_line)
 
         # v2 scan
@@ -195,7 +195,7 @@ class ScanVisual(Node):
         self.virtual_pos[1:-1, 0] = xv
         self.virtual_pos[1:-1, 1] = yv
         self.virtual_colors[2:-2] = self.virtual_color
-        self.color_disparities(rv, self.virtual_colors[1:-1])
+        # self.color_disparities(rv, self.virtual_colors[1:-1])
 
         # v2 ranges
         rv2 = self.v2_ranges
