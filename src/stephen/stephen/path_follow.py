@@ -42,7 +42,7 @@ fast_print = False
 
 cycle_time = 1e-5
 
-flat_speed = 0.0
+flat_speed = 1.0
 smoothing_exp = 2.0
 disparity_threshold = 0.5
 
@@ -85,7 +85,7 @@ class PathFollow(Node):
         # Path
         self.path = Path(
             disparity_threshold=0.5,
-            extension=0.5,
+            extension=0.35,
             steering_extension=0.0,
             min_gap_width=0.0,
             max_steering_angle=self.max_steering_angle,
@@ -310,7 +310,9 @@ class Path:
 
         # Maybe use min gap because not all points extended (wall of curvature)
 
-        # Disparitity series could overwrite to me extension further back
+        # Neg_disp extending pos_disp
+
+        # Roughly Parallel disps fluctuate causing random switching when in same choice section
 
         global disparity_threshold
         diffs = np.diff(ranges)
@@ -336,7 +338,8 @@ class Path:
             right_intersect = points[-1] if points.size else disp
             if extensions[right_intersect] > new_ext:
                 right_intersect += 1
-            ranges[right_intersect: left_intersect + 1] = new_ext
+            ranges_slice = ranges[right_intersect: left_intersect + 1]
+            np.minimum(ranges_slice, new_ext, out=ranges_slice)
 
         for disp in neg_disp:
             # Walk gap until intersection
@@ -356,7 +359,8 @@ class Path:
             left_intersect = points[0] + disp + 1 if points.size else disp
             if extensions[left_intersect] > new_ext:
                 left_intersect -= 1
-            ranges[right_intersect: left_intersect + 1] = new_ext
+            ranges_slice = ranges[right_intersect: left_intersect + 1]
+            np.minimum(ranges_slice, new_ext, out=ranges_slice)
 
     def index_extend(self, ranges):
         global disparity_threshold
