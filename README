@@ -1,0 +1,7 @@
+# Stephen's Workspace
+
+# Commands (ros2 run stephen *)
+path_follow - Disparity following algorithm with extension
+gap_follow - Gap follow algorithm with naive disparity extension
+test - Path follow template that can be modified for testing
+scan_visual - Vispy app that displays scans and additional information
