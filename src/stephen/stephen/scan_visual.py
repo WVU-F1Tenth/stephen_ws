@@ -27,14 +27,14 @@ class ScanVisual(Node):
         self.v2_sub = self.create_subscription(Float32MultiArray, '/v2_ranges', self.update_v2, 10)
 
         # Visual options
-        self.line_width = 4 # Pixels
+        self.line_width = 3 # Pixels
         self.scan_color = (.8, .8, .8, 1.)
         self.disparity_color = (1.0, 0.2, 0.2, 1.0)
         self.virtual_color = (0.0, 1.0, 0.2, 0.5)
         self.steering_color = (0.4, 0.4, 1.0, 1.0)
         self.v2_color = (1.0, 0.6, 0.2, 1.0)
 
-         # Canvas + view
+        # Canvas + view
         self.canvas = scene.SceneCanvas(keys='interactive',
                                     show=True,
                                     vsync=True,
@@ -51,8 +51,9 @@ class ScanVisual(Node):
         self.scan_size = N
 
         # --- Scan geometry (example values; replace with your LaserScan msg) ---
-        angle_min = -3*np.pi/4 + np.pi/2
-        angle_increment = 3*np.pi / (2 * N)  # span 270° like many LiDARs
+        # angle_min = -3*np.pi/4 + np.pi/2
+        angle_min = scan.angle_min + np.pi/2
+        angle_increment = scan.angle_increment
         self.theta = angle_min + np.arange(N, dtype=np.float32)*angle_increment
 
         # Precompute unit vectors ONCE
@@ -121,13 +122,38 @@ class ScanVisual(Node):
         circ30m.order = 0.0
         view.add(circ30m)
 
-        # Forward facing line
-        center_line = Line(
-            pos=((0.0, 0.0), (0.0, 100.0)), color=(.3,.3,.3,1.),
-            method='gl', connect='strip')
-        center_line.set_gl_state(depth_test=False, blend=True)
-        center_line.order = 1.0
-        view.add(center_line)
+        # # Heading line
+        # center_line = Line(
+        #     pos=((0.0, 0.0), (0.0, 100.0)), color=(.3,.3,.3,1.),
+        #     method='gl', connect='strip')
+        # center_line.set_gl_state(depth_test=False, blend=True)
+        # center_line.order = 1.0
+        # view.add(center_line)
+
+        # Forward increment lines
+        self.increment_lines = []
+        if N % 2 == 0: # As in sim case of 1080
+            mid_right = int(N/2) - 1
+            mid_left = int(N/2)
+            angle_idxs = [mid_right, mid_left]
+        else:
+            mid = int(N/2)
+            mid_right = int(N/2) - 1
+            mid_left = int(N/2) + 1
+            angle_idxs = [mid_right, mid, mid_left]
+
+        for idx in angle_idxs:
+            self.increment_lines.append(
+                Line(
+                    pos=((0.0, 0.0), (100*self.ux[idx], 100*self.uy[idx])),
+                    color=(.3,.3,.3,1.), method='gl',
+                    connect='strip', width=self.line_width)
+            )
+
+        for line in self.increment_lines:
+            view.add(line)
+            line.order = 4.0
+            line.set_gl_state(depth_test=False, blend=True)
 
         # Inner circle representing car
         car_circ = Line(

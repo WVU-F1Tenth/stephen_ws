@@ -21,6 +21,8 @@ import threading
 
 
 # TODO:
+# - Off by one errors
+# - Fix index-angle functions
 # - Disparity moving on convex curvature causes wiggling
 # - False disparity switching when alternating to either side of heading
 # - wall_extension creates false disparities
@@ -42,7 +44,7 @@ fast_print = False
 
 cycle_time = 1e-5
 
-flat_speed = 1.0
+flat_speed = 0.0
 smoothing_exp = 2.0
 disparity_threshold = 0.5
 
@@ -758,6 +760,8 @@ def input_thread():
         elif cmd == 'l':
             disparity_threshold += .1
             print(f'disparity threshold = {disparity_threshold:.2}')
+        elif cmd == 'x':
+            flat_speed = 0.0
         
                 
 def handler(sig, frame):
