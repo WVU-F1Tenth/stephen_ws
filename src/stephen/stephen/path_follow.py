@@ -327,12 +327,13 @@ class Path:
             disp_range = ranges[disp]
             points = np.flatnonzero((ranges[disp+1:] <= disp_range) | (extensions[disp+1:] > disp_range))
             if points.size:
-                left_intersect = points[0] + disp+1
+                left_intersect = points[0] + disp + 1
             else:
                 continue
             # Drop to intersection range
             if extensions[left_intersect] > disp_range:
-                new_ext = extensions[left_intersect-1]
+                left_intersect -= 1
+                new_ext = extensions[left_intersect]
             else:
                 new_ext = ranges[left_intersect]
             # Backtrack until second intersection
@@ -353,7 +354,8 @@ class Path:
                 continue
             # Drop to intersection range
             if extensions[right_intersect] > disp_range:
-                new_ext = extensions[right_intersect+1]
+                right_intersect += 1
+                new_ext = extensions[right_intersect]
             else:
                 new_ext = ranges[right_intersect]
             # Backtrack until second intersection
@@ -588,16 +590,16 @@ class Path:
         self.range_min = scan.range_min
         self.range_max = scan.range_max
 
-        self.index_to_angle_array = np.arange(self.size) + self.angle_min
-        self.fov = self.angle_max - self.angle_min
         self.increment = self.angle_increment
+        self.index_to_angle_array = np.arange(self.size)*self.increment + self.angle_min
+        self.fov = self.angle_max - self.angle_min
         if file_output:
             for key, value in self.__dict__.items():
                 file_info.path_info[key] = value
 
     def angle_to_index(self, angle):
         abs_angle = angle + self.angle_min
-        total_angle = self.angle_min + self.angle_max
+        total_angle = self.angle_max - self.angle_min
         return round(self.size * (abs_angle / total_angle))
 
     def index_to_angle(self, index):
@@ -746,7 +748,7 @@ class Speed:
     
 def input_thread():
     global flat_speed, smoothing_exp, disparity_threshold
-    print('Command (s=-speed, d=+speed, j=-exp, k=+exp)')
+    print('Command (x=stop, s=-speed, d=+speed, j=-exp, k=+exp)')
     while True:
         cmd = input()
         if cmd == 's':
