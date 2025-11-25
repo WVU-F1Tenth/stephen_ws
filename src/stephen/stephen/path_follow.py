@@ -21,7 +21,6 @@ import threading
 
 
 # TODO:
-# - No path error
 # - Fix gap definition
 # - Handle potential bottle neck disparity overlap
 # - Tune choose path
@@ -38,7 +37,7 @@ fast_print = False
 
 cycle_time = 1e-5
 
-flat_speed = 0.0
+flat_speed = 1.0
 smoothing_exp = 2.0
 disparity_threshold = 0.5
 
@@ -187,9 +186,9 @@ class PathFollow(Node):
         widths, depths = self.path.gaps(ranges, pos_disp, neg_disp)
         disps = np.concatenate((pos_disp, neg_disp))
 
-        # Use subset
-        idxs = np.flatnonzero(widths < 0)
-        disps, widths, depths = disps[idxs], widths[idxs], depths[idxs]
+        # # Use subset
+        # idxs = np.flatnonzero(widths < 0)
+        # disps, widths, depths = disps[idxs], widths[idxs], depths[idxs]
 
         disp, width, depth = self.path.choose(disps, widths, depths)
 
@@ -739,7 +738,7 @@ class Speed:
     
 def input_thread():
     global flat_speed, smoothing_exp, disparity_threshold
-    print('Command (x=stop, s=-speed, d=+speed, j=-exp, k=+exp)')
+    print('Command (x=stop, s=-speed, d=+speed, j=-exp, k=+exp, h-=threshold, l+=threshold)')
     while True:
         cmd = input()
         if cmd == 's':
