@@ -490,9 +490,11 @@ class Path:
         right = -1
         # HARDCODED
         steps = (0, 180, 360, 540 if self.size == 1081 else 539)
-        mid = self.mid_index
-        right_sections = [(mid - steps[i+1], mid - steps[i]) for i in (range(len(steps) - 1))]
-        left_sections = [(mid + steps[i], mid + steps[i+1]) for i in (range(len(steps) - 1))]
+        N = self.size
+        right_start = int(N/2 - 1)
+        left_start = int(N/2) if N % 2 == 0 else int(N/2 + 1)
+        right_sections = [(right_start - steps[i+1], right_start - steps[i]) for i in (range(len(steps) - 1))]
+        left_sections = [(left_start + steps[i], left_start + steps[i+1]) for i in (range(len(steps) - 1))]
         
         if self.track_direction == 'ccw':
             sections = [x for pair in zip(left_sections, right_sections) for x in pair]
@@ -501,7 +503,7 @@ class Path:
         else:
             raise ValueError('Invalid track_direction')
         
-        # Prevents sudden choice swapping due to dead on heading
+        # Prevents sudden choice swapping due to dead on heading, also mid index
         sections.insert(1, (535, 545))
         
         for section in sections:
@@ -575,6 +577,8 @@ class Path:
     def setup(self, scan):
         self.is_set = True
         self.size = len(scan.ranges)
+
+        # Scan message attributes
         self.angle_min = scan.angle_min
         self.angle_max = scan.angle_max
         assert scan.angle_max == abs(scan.angle_min)
@@ -583,21 +587,24 @@ class Path:
         self.scan_time = scan.scan_time
         self.range_min = scan.range_min
         self.range_max = scan.range_max
+
+        self.index_to_angle_array = np.arange(self.size) + self.angle_min
         self.fov = self.angle_max - self.angle_min
-        self.mid_index = math.ceil((self.size - 1) / 2)
-        self.increment = (self.angle_max - self.angle_min) / self.size
+        self.increment = self.angle_increment
         if file_output:
             for key, value in self.__dict__.items():
                 file_info.path_info[key] = value
 
-    def angle_to_index(self, angle) -> int:
-        return self.mid_index + round(angle / self.increment)
+    def angle_to_index(self, angle):
+        abs_angle = angle + self.angle_min
+        total_angle = self.angle_min + self.angle_max
+        return round(self.size * (abs_angle / total_angle))
 
-    def index_to_angle(self, index) -> float:
-        return (index - self.mid_index) * self.increment
+    def index_to_angle(self, index):
+        return self.index_to_angle_array[index]
 
-    def index_to_degrees(self, index) -> float:
-        return round(math.degrees((index - self.mid_index) * self.increment), 4)
+    def index_to_degrees(self, index):
+        return round(math.degrees(self.index_to_angle(index)), 4)
 
     def fov_slice(self, ranges, fov):
         fov = math.radians(fov)
