@@ -27,9 +27,10 @@ class ScanVisual(Node):
         self.v2_sub = self.create_subscription(Float32MultiArray, '/v2_ranges', self.update_v2, 10)
 
         # Visual options
-        self.line_width = 3 # Pixels
+        self.line_width = 3 # Pixels / Not used for glfw
         self.scan_color = (.8, .8, .8, 1.)
         self.disparity_color = (1.0, 0.2, 0.2, 1.0)
+        self.disparity_color2 = (1.0, 0.4, 0.6, 1.0)
         self.virtual_color = (0.0, 1.0, 0.2, 0.5)
         self.steering_color = (0.4, 0.4, 1.0, 1.0)
         self.v2_color = (1.0, 0.6, 0.2, 1.0)
@@ -40,7 +41,8 @@ class ScanVisual(Node):
                                     vsync=True,
                                     bgcolor='black',
                                     title='Scan Visual',
-                                    size=(1280, 720))
+                                    # size=(1280, 720),
+                                    size=(1920, 1080))
         self.view = self.canvas.central_widget.add_view()
         self.view.camera = scene.PanZoomCamera(aspect=1)
         self.view.camera.set_range(x=(-10, 10), y=(-10, 10))  # set to your range (meters)
@@ -194,12 +196,12 @@ class ScanVisual(Node):
         self.drive = drive
         self.steering = drive.drive.steering_angle
 
-    def color_disparities(self, ranges, colors):
+    def color_disparities(self, ranges, colors, disparity_color):
         diffs = np.diff(ranges)
         seg_idx = np.where(np.abs(diffs) >= self.disparity_threshold)[0]
         if seg_idx.size:
             vert_idx = np.unique(np.concatenate([seg_idx, seg_idx+1]))
-            colors[vert_idx] = self.disparity_color
+            colors[vert_idx] = disparity_color
 
     def update_visual(self, _):
         
@@ -211,7 +213,7 @@ class ScanVisual(Node):
         self.pos[1:-1, 0] = x
         self.pos[1:-1, 1] = y
         self.colors[:] = self.scan_color
-        self.color_disparities(r, self.colors[1:-1])
+        self.color_disparities(r, self.colors[1:-1], self.disparity_color)
 
         # Virtual scan
         rv = self.virtual_ranges
@@ -221,7 +223,7 @@ class ScanVisual(Node):
         self.virtual_pos[1:-1, 0] = xv
         self.virtual_pos[1:-1, 1] = yv
         self.virtual_colors[2:-2] = self.virtual_color
-        # self.color_disparities(rv, self.virtual_colors[1:-1])
+        self.color_disparities(rv, self.virtual_colors[1:-1], self.disparity_color2)
 
         # v2 ranges
         rv2 = self.v2_ranges

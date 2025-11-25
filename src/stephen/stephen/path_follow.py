@@ -21,8 +21,8 @@ import threading
 
 
 # TODO:
+# - No path error
 # - Fix gap definition
-# - wall_extension creates false disparities
 # - Handle potential bottle neck disparity overlap
 # - Tune choose path
 # - Smoothing function sometimes gets stuck at offset
@@ -83,7 +83,7 @@ class PathFollow(Node):
             disparity_threshold=0.5,
             extension=0.35,
             steering_extension=0.0,
-            min_gap_width=0.0,
+            min_gap_width=self.car_radius,
             max_steering_angle=self.max_steering_angle,
             track_direction='ccw',
             # | disparity | center |
@@ -320,27 +320,27 @@ class Path:
         pos_disp = np.flatnonzero(diffs >= disparity_threshold)
         neg_disp = np.flatnonzero(diffs <= -disparity_threshold) + 1
 
-        # for disp in pos_disp:
-        #     # Walk gap until intersection
-        #     disp_range = ranges[disp]
-        #     points = np.flatnonzero((ranges[disp+1:] <= disp_range) | (extensions[disp+1:] > disp_range))
-        #     if points.size:
-        #         left_intersect = points[0] + disp + 1
-        #     else:
-        #         continue
-        #     # Drop to intersection range
-        #     if extensions[left_intersect] > disp_range:
-        #         left_intersect -= 1
-        #         new_ext = extensions[left_intersect]
-        #     else:
-        #         new_ext = ranges[left_intersect]
-        #     # Backtrack until second intersection
-        #     points = np.flatnonzero((ranges[:disp] <= new_ext) | (extensions[:disp] > new_ext))
-        #     right_intersect = points[-1] if points.size else disp
-        #     if extensions[right_intersect] > new_ext:
-        #         right_intersect += 1
-        #     ranges_slice = ranges[right_intersect: left_intersect + 1]
-        #     np.minimum(ranges_slice, new_ext, out=ranges_slice)
+        for disp in pos_disp:
+            # Walk gap until intersection
+            disp_range = ranges[disp]
+            points = np.flatnonzero((ranges[disp+1:] <= disp_range) | (extensions[disp+1:] > disp_range))
+            if points.size:
+                left_intersect = points[0] + disp + 1
+            else:
+                continue
+            # Drop to intersection range
+            if extensions[left_intersect] > disp_range:
+                left_intersect -= 1
+                new_ext = extensions[left_intersect]
+            else:
+                new_ext = disp_range
+            # Backtrack until second intersection
+            points = np.flatnonzero((ranges[:disp] <= new_ext) | (extensions[:disp] > new_ext))
+            right_intersect = points[-1] if points.size else disp
+            if extensions[right_intersect] > new_ext:
+                right_intersect += 1
+            ranges_slice = ranges[right_intersect: left_intersect + 1]
+            np.minimum(ranges_slice, new_ext, out=ranges_slice)
 
         for disp in neg_disp:
             # Walk gap until intersection
@@ -355,7 +355,7 @@ class Path:
                 right_intersect += 1
                 new_ext = extensions[right_intersect]
             else:
-                new_ext = ranges[right_intersect]
+                new_ext = disp_range
             # Backtrack until second intersection
             points = np.flatnonzero((ranges[disp+1:] <= new_ext) | (extensions[disp+1:] > new_ext))
             left_intersect = points[0] + disp + 1 if points.size else disp
@@ -450,7 +450,7 @@ class Path:
         global disparity_threshold
         diffs = np.diff(ranges)
         pos_disp = np.flatnonzero(diffs >= disparity_threshold)
-        neg_disp = np.flatnonzero(diffs < -disparity_threshold)
+        neg_disp = np.flatnonzero(diffs <= -disparity_threshold)
         return (pos_disp, neg_disp + 1)
     
     def gaps(self, ranges, pos_disps, neg_disps):
@@ -761,6 +761,7 @@ def input_thread():
             disparity_threshold += .1
             print(f'disparity threshold = {disparity_threshold:.2}')
         elif cmd == 'x':
+            print('stopped')
             flat_speed = 0.0
         
                 
