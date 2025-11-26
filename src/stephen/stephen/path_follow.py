@@ -21,7 +21,9 @@ import threading
 
 
 # TODO:
-# - More effiction wall extension
+# - Every disparity has a corresponding matrix based extension
+# - Not using original disparities in path logic causes issure, esp. when near wall
+# - More effiction wall extension (try cupy)
 # - Fix gap definition
 # - Handle potential bottle neck disparity overlap
 # - Tune choose path
@@ -505,7 +507,7 @@ class Path:
             raise ValueError('Invalid track_direction')
         
         # Prevents sudden choice swapping due to dead on heading, also mid index
-        sections.insert(1, (535, 545))
+        sections.insert(1, (530, 550))
         
         for section in sections:
             gap_idx = self.check_gap(starts, widths, depths, section)
@@ -747,6 +749,12 @@ def input_thread():
             print(f'speed = {flat_speed:.2}')
         elif cmd == 'd':
             flat_speed += .1
+            print(f'speed = {flat_speed:.2}')
+        elif cmd == 'S':
+            flat_speed -= 1.0
+            print(f'speed = {flat_speed:.2}')
+        elif cmd == 'D':
+            flat_speed += 1.0
             print(f'speed = {flat_speed:.2}')
         elif cmd == 'j':
             smoothing_exp -= .1
