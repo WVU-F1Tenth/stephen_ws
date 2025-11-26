@@ -21,6 +21,7 @@ import threading
 
 
 # TODO:
+# - More effiction wall extension
 # - Fix gap definition
 # - Handle potential bottle neck disparity overlap
 # - Tune choose path
@@ -489,10 +490,10 @@ class Path:
         left = 1
         right = -1
         # HARDCODED
-        steps = (0, 180, 360, 540 if self.size == 1081 else 539)
+        steps = (0, 90, 180, 360, 539)
         N = self.size
-        right_start = int(N/2 - 1)
-        left_start = int(N/2) if N % 2 == 0 else int(N/2 + 1)
+        right_start = int(N/2 - 1) if N % 2 == 0 else int(N/2)
+        left_start = int(N/2)
         right_sections = [(right_start - steps[i+1], right_start - steps[i]) for i in (range(len(steps) - 1))]
         left_sections = [(left_start + steps[i], left_start + steps[i+1]) for i in (range(len(steps) - 1))]
         

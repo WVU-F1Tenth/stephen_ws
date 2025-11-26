@@ -154,7 +154,7 @@ class ScanVisual(Node):
 
         for line in self.increment_lines:
             view.add(line)
-            line.order = 4.0
+            line.order = 1.0
             line.set_gl_state(depth_test=False, blend=True)
 
         # Inner circle representing car
