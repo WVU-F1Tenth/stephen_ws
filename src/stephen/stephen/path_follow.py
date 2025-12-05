@@ -21,9 +21,8 @@ import threading
 
 
 # TODO:
-# - Every disparity has a corresponding matrix based extension
-# - Not using original disparities in path logic causes issure, esp. when near wall
-# - More effiction wall extension (try cupy)
+# - Range limit could be adaptive based on amount of path taken up or geometric distance
+# - More effiction wall extension (try cupy or only 720 indexes)
 # - Fix gap definition
 # - Handle potential bottle neck disparity overlap
 # - Tune choose path
@@ -81,7 +80,7 @@ class PathFollow(Node):
         self.turning_radius = self.wheelbase/math.tan(self.max_steering_angle)
 
         # Path
-        self.path = Path(
+        self.map = Map(
             disparity_threshold=0.5,
             extension=0.35,
             steering_extension=0.0,
@@ -162,8 +161,8 @@ class PathFollow(Node):
         adjust_start = start_time
         overhead_time = (start_time - self.overhead_start) * 1_000
 
-        if not self.path.is_set:
-            self.path.setup(scan)
+        if not self.map.is_set:
+            self.map.setup(scan)
             print('Running...')
         
         if fast_print:
@@ -176,34 +175,32 @@ class PathFollow(Node):
             file_info.path_info['min_range'] = min(np.min(ranges), file_info.path_info['min_range'])
 
         # =================== Pipeline ========================
+        
         pipeline_start = perf_counter()
 
         #self.path.apply_range_limit(ranges, 10.0)
 
-        extensions = self.path.get_wall_extensions(ranges)
-        self.path.disparity_extend2(ranges, extensions)
+        extensions = self.map.get_virtual(ranges)
         
-        # Disp are wall positions
-        pos_disp, neg_disp = self.path.disparities(ranges)
+        pos_disps, neg_disps = self.map.disparities(ranges)
+        disps = np.concatenate((pos_disps, neg_disps))
 
-        widths, depths = self.path.gaps(ranges, pos_disp, neg_disp)
-        disps = np.concatenate((pos_disp, neg_disp))
+        pos_ext_disps, neg_ext_disps = self.map.disparities(extensions)
+        ext_disps = np.concatenate((pos_ext_disps, neg_ext_disps))
 
-        # # Use subset
-        # idxs = np.flatnonzero(widths < 0)
-        # disps, widths, depths = disps[idxs], widths[idxs], depths[idxs]
+        paths = self.map.get_paths(ranges, pos_disps, neg_disps)
 
-        disp, width, depth = self.path.choose(disps, widths, depths)
+        path = self.map.choose(paths)
 
-        if disp is None or width is None or depth is None:
+        if path is None:
             steering_angle = self.prev_steering_angle
             speed = self.prev_speed
         else:
-            steering_angle = self.path.steering(disp, width, depth)
+            steering_angle = self.map.steering(path)
 
             steering_angle = self.smooth.get(steering_angle, self.prev_speed)
 
-            speed = self.speed.get(steering_angle, depth + self.car_radius - self.turning_radius)
+            speed = self.speed.get(steering_angle, path.depth + self.car_radius - self.turning_radius)
             self.prev_speed = speed
         
         pipeline_time = (perf_counter() - pipeline_start) * 1_000
@@ -217,15 +214,12 @@ class PathFollow(Node):
         drive_msg.drive.steering_angle = steering_angle
         drive_msg.drive.speed = speed
         self.drive_pub.publish(drive_msg)
-
         if publish_virtual_scan:
             self.scan_pub.publish(scan)
-
         if publish_v2:
             msg = Float32MultiArray()
             msg.data = extensions.tolist()
             self.v2_pub.publish(msg)
-
         if (publish_marker):
             # Marker
             L = 20.0
@@ -251,9 +245,7 @@ class PathFollow(Node):
             print(f'\n{speed=:.2}')
             print(f'{steering_angle=:.2}')
             # Timing info
-
         adjust_time = (perf_counter() - adjust_start)*1_000
-
         if fast_print:
             print(f'{adjust_time=:.3f}')
 
@@ -273,6 +265,17 @@ class PathFollow(Node):
         self.overhead_start = perf_counter()
 
 class Path:
+    def __init__(self, disp, depth=None, ext=None, disp_radius=None,
+                  ext_width=None, ext_index_width=None, ext_depth=None):
+        self.disp = disp
+        self.depth = depth
+        disp_radius = disp_radius
+        self.v_width = ext_width
+        self.v_index_width = ext_index_width
+        self.ext = ext
+        self.ext_depth = ext_depth
+
+class Map:
     def __init__(self, disparity_threshold, extension, steering_extension,
                   min_gap_width, track_direction, max_steering_angle, steering_method, path_method):
         self.disparity_threshold = disparity_threshold
@@ -289,40 +292,22 @@ class Path:
         safe_gap_value = 100.0
         ranges[ranges > limit] = safe_gap_value
 
-    def get_wall_extensions(self, ranges):
+    def get_virtual(self, ranges):
         extension = self.extension
         n = len(ranges)
         range_matrix = np.full((n, n), np.inf, dtype=np.float32)
-
         ratio = extension / (2 * ranges)
         ratio = np.clip(ratio, -1.0, 1.0)
         index_extensions = abs(np.floor(2*np.arcsin(ratio)/self.angle_increment).astype(np.int32))
-
         rows = np.arange(n)[:, None]
         cols = np.arange(n)[None, :]
         mask = np.abs(cols-rows) <= index_extensions[:, None]
-
         range_matrix = np.where(mask, ranges[:, None], np.inf).astype(np.float32)
-
         col_mins = range_matrix.min(axis=0)
-
         return col_mins
     
-    def disparity_extend2(self, ranges, extensions):
-
-        # Maybe use min gap because not all points extended (wall of curvature)
-
-        # Incorrect neg_disp, pos_disp overlap behavior
-
-        # Roughly Parallel disps fluctuate causing random switching when in same choice section
-
-        global disparity_threshold
-        diffs = np.diff(ranges)
-        # Disps are wall points
-        pos_disp = np.flatnonzero(diffs >= disparity_threshold)
-        neg_disp = np.flatnonzero(diffs <= -disparity_threshold) + 1
-
-        for disp in pos_disp:
+    def get_ggg(self, ranges, extensions, pos_disps, neg_disps):
+        for disp in pos_disps:
             # Walk gap until intersection
             disp_range = ranges[disp]
             points = np.flatnonzero((ranges[disp+1:] <= disp_range) | (extensions[disp+1:] > disp_range))
@@ -344,7 +329,7 @@ class Path:
             ranges_slice = ranges[right_intersect: left_intersect + 1]
             np.minimum(ranges_slice, new_ext, out=ranges_slice)
 
-        for disp in neg_disp:
+        for disp in neg_disps:
             # Walk gap until intersection
             disp_range = ranges[disp]
             points = np.flatnonzero((ranges[:disp] <= disp_range) | (extensions[:disp] > disp_range))
@@ -366,87 +351,60 @@ class Path:
             ranges_slice = ranges[right_intersect: left_intersect + 1]
             np.minimum(ranges_slice, new_ext, out=ranges_slice)
 
-    def index_extend(self, ranges):
+            return None
+    
+    def disparity_extend2(self, ranges, extensions):
+
+        # Maybe use min gap because not all points extended (wall of curvature)
+        # Roughly Parallel disps fluctuate causing random switching when in same choice section
+
         global disparity_threshold
-        # Extend from direction of closer range
         diffs = np.diff(ranges)
-        pos_disp = np.flatnonzero(diffs >= disparity_threshold)
-        neg_disp = np.flatnonzero(diffs <= -disparity_threshold)
-        pos_disp_ranges = ranges[pos_disp]
-        neg_disp_ranges = ranges[neg_disp + 1]
-        
-        index_offset = 67
-
-        # Positive extends in the positive direction starting with i + 1
-        for i in range(pos_disp.size):
-            disp = pos_disp[i]
-            disp_range = pos_disp_ranges[i]
-            # Dist_count = Index count to extend from wall
-            coeff = math.sqrt(abs(math.cos(self.index_to_angle(disp))))
-            # coeff = 1
-            dist_count = math.ceil(coeff * index_offset)
-            gap_start = disp + 1
-            if (dist_count > 0):
-                n = min(dist_count, ranges.size - gap_start)
-                idxs = slice(gap_start, gap_start + n)
-                np.minimum(ranges[idxs], disp_range, out=ranges[idxs])
-
-        # Negative extends in the negative direction starting with i
-        for i in range(neg_disp.size):
-            disp = neg_disp[i]
-            disp_range = neg_disp_ranges[i]
-            # Dist_count = Index count to extend from wall
-            coeff = math.sqrt(abs(math.cos(self.index_to_angle(disp))))
-            # coeff = 1
-            dist_count = math.ceil(coeff * index_offset)
-            gap_start = disp
-            if (dist_count > 0):
-                n = min(dist_count, gap_start)
-                idxs = slice(gap_start - n, gap_start + 1)
-                np.minimum(ranges[idxs], disp_range, out=ranges[idxs])
-
-
-    def disparity_extend(self, ranges):
-        global disparity_threshold
-        extension = self.extension
-        # Extend from direction of closer range
-        diffs = np.diff(ranges)
-        pos_disp = np.flatnonzero(diffs >= disparity_threshold)
-        neg_disp = np.flatnonzero(diffs <= -disparity_threshold)
-        pos_disp_ranges = ranges[pos_disp]
-        neg_disp_ranges = ranges[neg_disp + 1]
-
-        # Positive extends in the positive direction starting with i + 1
-        for i in range(pos_disp.size):
-            disp = pos_disp[i]
-            disp_range = pos_disp_ranges[i]
-            ratio = extension/(2*disp_range)
-            ratio = np.clip(ratio, -1.0, 1.0)
-            # Dist_count = Index count to extend from wall
-            # coeff = math.sqrt(abs(math.cos(self.index_to_angle(disp))))
-            coeff = 1
-            dist_count = math.ceil(coeff * 2 * math.asin(ratio) / self.increment)
-            gap_start = disp + 1
-            if (dist_count > 0):
-                n = min(dist_count, ranges.size - gap_start)
-                idxs = slice(gap_start, gap_start + n)
-                np.minimum(ranges[idxs], disp_range, out=ranges[idxs])
-
-        # Negative extends in the negative direction starting with i
-        for i in range(neg_disp.size):
-            disp = neg_disp[i]
-            disp_range = neg_disp_ranges[i]
-            ratio = extension/(2*disp_range)
-            ratio = np.clip(ratio, -1.0, 1.0)
-            # Dist_count = Index count to extend from wall
-            # coeff = math.sqrt(abs(math.cos(self.index_to_angle(disp))))
-            coeff = 1
-            dist_count = math.ceil(coeff * 2 * math.asin(ratio) / self.increment)
-            gap_start = disp
-            if (dist_count > 0):
-                n = min(dist_count, gap_start)
-                idxs = slice(gap_start - n, gap_start + 1)
-                np.minimum(ranges[idxs], disp_range, out=ranges[idxs])
+        # Disps are wall points
+        pos_disps = np.flatnonzero(diffs >= disparity_threshold)
+        neg_disps = np.flatnonzero(diffs <= -disparity_threshold) + 1
+        for disp in pos_disps:
+            # Walk gap until intersection
+            disp_range = ranges[disp]
+            points = np.flatnonzero((ranges[disp+1:] <= disp_range) | (extensions[disp+1:] > disp_range))
+            if points.size:
+                left_intersect = points[0] + disp + 1
+            else:
+                continue
+            # Drop to intersection range
+            if extensions[left_intersect] > disp_range:
+                left_intersect -= 1
+                new_ext = extensions[left_intersect]
+            else:
+                new_ext = disp_range
+            # Backtrack until second intersection
+            points = np.flatnonzero((ranges[:disp] <= new_ext) | (extensions[:disp] > new_ext))
+            right_intersect = points[-1] if points.size else disp
+            if extensions[right_intersect] > new_ext:
+                right_intersect += 1
+            ranges_slice = ranges[right_intersect: left_intersect + 1]
+            np.minimum(ranges_slice, new_ext, out=ranges_slice)
+        for disp in neg_disps:
+            # Walk gap until intersection
+            disp_range = ranges[disp]
+            points = np.flatnonzero((ranges[:disp] <= disp_range) | (extensions[:disp] > disp_range))
+            if points.size:
+                right_intersect = points[-1]
+            else:
+                continue
+            # Drop to intersection range
+            if extensions[right_intersect] > disp_range:
+                right_intersect += 1
+                new_ext = extensions[right_intersect]
+            else:
+                new_ext = disp_range
+            # Backtrack until second intersection
+            points = np.flatnonzero((ranges[disp+1:] <= new_ext) | (extensions[disp+1:] > new_ext))
+            left_intersect = points[0] + disp + 1 if points.size else disp
+            if extensions[left_intersect] > new_ext:
+                left_intersect -= 1
+            ranges_slice = ranges[right_intersect: left_intersect + 1]
+            np.minimum(ranges_slice, new_ext, out=ranges_slice)
 
     def disparities(self, ranges):
         global disparity_threshold
@@ -454,6 +412,9 @@ class Path:
         pos_disp = np.flatnonzero(diffs >= disparity_threshold)
         neg_disp = np.flatnonzero(diffs <= -disparity_threshold)
         return (pos_disp, neg_disp + 1)
+    
+    def get_paths(self, ranges, pos_disps, neg_disps):
+        paths = []
     
     def gaps(self, ranges, pos_disps, neg_disps):
         widths = []
@@ -470,7 +431,6 @@ class Path:
             dist = 2 * math.sin(theta / 2) * disp_range
             widths.append(dist)
             depths.append(disp_range)
-            
         for i in neg_disps:
             disp_range = ranges[i]
             index_count = 0
@@ -483,9 +443,7 @@ class Path:
             dist = 2 * math.sin(theta / 2) * disp_range
             widths.append(-dist)
             depths.append(disp_range)
-
         widths, depths = np.array(widths), np.array(depths)
-
         return widths, depths
 
     def choose(self, starts, widths, depths):
@@ -498,22 +456,19 @@ class Path:
         left_start = int(N/2)
         right_sections = [(right_start - steps[i+1], right_start - steps[i]) for i in (range(len(steps) - 1))]
         left_sections = [(left_start + steps[i], left_start + steps[i+1]) for i in (range(len(steps) - 1))]
-        
+        # Create section list
         if self.track_direction == 'ccw':
             sections = [x for pair in zip(left_sections, right_sections) for x in pair]
         elif self.track_direction == 'cw':
             sections = [x for pair in zip(right_sections, left_sections) for x in pair]
         else:
             raise ValueError('Invalid track_direction')
-        
         # Prevents sudden choice swapping due to dead on heading, also mid index
         sections.insert(1, (530, 550))
-        
         for section in sections:
             gap_idx = self.check_gap(starts, widths, depths, section)
             if not gap_idx is None:
                     return (starts[gap_idx], widths[gap_idx], depths[gap_idx])
-        
         print('No path...')
         return None, None, None
 
@@ -523,7 +478,6 @@ class Path:
         if not np.any(mask):
             return None
         local_map = np.where(mask)[0]
-
         if self.path_method == 'furthest':
             section_depths = depths[mask]
             local_gap_idx = np.nanargmax(section_depths)

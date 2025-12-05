@@ -21,9 +21,9 @@ class ScanVisual(Node):
         self.disparity_threshold = disparity_threshold
         self.is_set = False
 
-        self.virtual_scan_sub = self.create_subscription(LaserScan, '/virtual_scan', self.update_virtual, 10)
+        # self.virtual_scan_sub = self.create_subscription(LaserScan, '/virtual_scan', self.update_virtual, 10)
         self.laser_scan_sub = self.create_subscription(LaserScan, '/scan', self.update_ranges, 10)
-        self.steering_sub = self.create_subscription(AckermannDriveStamped, '/drive', self.update_drive, 10)
+        # self.steering_sub = self.create_subscription(AckermannDriveStamped, '/drive', self.update_drive, 10)
         self.v2_sub = self.create_subscription(Float32MultiArray, '/v2_ranges', self.update_v2, 10)
 
         # Visual options
