@@ -13,6 +13,8 @@
   <test_depend>python3-pytest</test_depend>
   <test_depend>python3-pandas</test_depend>
   <test_depend>python3-numba</test_depend>
+  <exec_depend>tf2_geometry_msgs</exec_depend>
+  <exec_depend>python3-transforms3d</exec_depend>
 
   <export>
     <build_type>ament_python</build_type>

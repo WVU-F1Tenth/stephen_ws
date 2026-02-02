@@ -13,6 +13,7 @@ from rclpy.duration import Duration
 from rclpy.time import Time
 from typing import Tuple
 from pathlib import Path
+import tf2_geometry_msgs
 
 LOOKAHEAD_DISTANCE = 1.20
 CSV_PATH = Path(__file__).resolve().parent.parent / 'pursuit' / 'data.csv'
@@ -73,17 +74,20 @@ class PurePursuit(Node):
                            odometry_info.pose.pose.orientation.x * odometry_info.pose.pose.orientation.y)
         cosy_cosp = 1.0 - 2.0 * (odometry_info.pose.pose.orientation.y * odometry_info.pose.pose.orientation.y + 
                                  odometry_info.pose.pose.orientation.z * odometry_info.pose.pose.orientation.z)
-        self.heading_current = np.arctan2(siny_cosp, cosy_cosp)
+        self.heading_odom = np.arctan2(siny_cosp, cosy_cosp)
         
         # Get goal point
         x_map, y_map = self.tfxy('odom', 'map', self.x_odom, self.y_odom)
         dx = x_map - self.waypoints_x
         dy = y_map - self.waypoints_y
         d = np.hypot(dx, dy)
-        i = np.argmin(d)
-        while d[i] < LOOKAHEAD_DISTANCE:
-            i += 1
-        goal_index = i
+        start_index = np.argmin(d)
+        for i in range(d.size):
+            if d[(start_index + i) % d.size]:
+                break
+        if i == d.size - 1:
+            raise RuntimeError('Exhausted waypoints')
+        goal_index = start_index + i
 
         # Transform goal point to vehicle frame of reference
         x_goal_base_link, y_goal_base_link = self.tfxy(
@@ -91,7 +95,7 @@ class PurePursuit(Node):
 
         # Calculate curvature/steering angle
         L = np.hypot(x_goal_base_link, y_goal_base_link)
-        gamma = 2*abs(y_goal_base_link)/L**2
+        gamma = -2*y_goal_base_link/L**2
         delta = np.arctan(WHEELBASE*gamma)
         self.angle = np.clip(delta, -MAX_STEER, MAX_STEER)
         
@@ -130,6 +134,7 @@ class PurePursuit(Node):
 
     def reactive_control(self):
         ackermann_drive_result = AckermannDriveStamped()
+        ackermann_drive_result.header.stamp = self.get_clock().now().to_msg()
         ackermann_drive_result.drive.steering_angle = self.angle
         if abs(self.angle) > np.radians(20.0):
             ackermann_drive_result.drive.speed = 0.5
@@ -142,7 +147,7 @@ class PurePursuit(Node):
     def tfxy(self, from_frame, to_frame, x_odom: float, y_odom: float) -> Tuple[float, float]:
         p1 = PointStamped()
         p1.header.frame_id = from_frame
-        p1.header.stamp = Time().to_msg()
+        p1.header.stamp = self.get_clock().now().to_msg()
         p1.point.x = float(x_odom)
         p1.point.y = float(y_odom)
         p1.point.z = 0.0
