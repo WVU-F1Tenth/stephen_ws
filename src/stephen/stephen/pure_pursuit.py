@@ -14,9 +14,12 @@ from rclpy.time import Time
 from typing import Tuple
 from pathlib import Path
 import tf2_geometry_msgs
+from rclpy.time import Time
+import math
+from rclpy.qos import QoSProfile, ReliabilityPolicy
 
 LOOKAHEAD_DISTANCE = 1.20
-CSV_PATH = Path(__file__).resolve().parent.parent / 'pursuit' / 'data.csv'
+CSV_PATH = Path.home() / 'sim_ws' / 'src' / 'particle_filter' / 'maps' / 'Austin_raceline.csv'
 if not CSV_PATH.exists():
     raise RuntimeError("Waypoint file doesn't exist")
 WHEELBASE = 1.2
@@ -30,7 +33,11 @@ class PurePursuit(Node):
         self.pub_drive = self.create_publisher(AckermannDriveStamped, '/drive', 10)
         self.pub_env_viz = self.create_publisher(Marker, '/env_viz', 10)
         self.pub_dynamic_viz = self.create_publisher(Marker, '/dynamic_viz', 10)
-        self.sub_odom = self.create_subscription(Odometry, '/ego_racecar/odom', self.pose_callback, 10)
+        qos = QoSProfile(
+            depth=10,
+            reliability=ReliabilityPolicy.BEST_EFFORT
+        )
+        self.sub_odom = self.create_subscription(Odometry, '/ego_racecar/odom', self.pose_callback,  qos)
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
@@ -54,10 +61,10 @@ class PurePursuit(Node):
         self.marker.color.g = 0.0
         self.marker.color.b = 1.0
 
-        df = pd.read_csv(CSV_PATH, header=None)
-        self.waypoints_x = df.iloc[:, 0].to_numpy(dtype=float)
-        self.waypoints_y = df.iloc[:, 1].to_numpy(dtype=float)
-        self.waypoints_heading = df.iloc[:, 2].to_numpy(dtype=float)
+        df = pd.read_csv(CSV_PATH, header=None, comment='#', sep=';')
+        self.waypoints_x = df.iloc[:, 1].to_numpy(dtype=float)
+        self.waypoints_y = df.iloc[:, 2].to_numpy(dtype=float)
+        self.waypoints_heading = None
         self.marker.points = [Point(x=float(x), y=float(y), z=0.0)
                               for x, y in zip(self.waypoints_x, self.waypoints_y)]
 
@@ -77,25 +84,27 @@ class PurePursuit(Node):
         self.heading_odom = np.arctan2(siny_cosp, cosy_cosp)
         
         # Get goal point
-        x_map, y_map = self.tfxy('odom', 'map', self.x_odom, self.y_odom)
+        x_map, y_map = self.x_odom, self.y_odom
         dx = x_map - self.waypoints_x
         dy = y_map - self.waypoints_y
         d = np.hypot(dx, dy)
         start_index = np.argmin(d)
         for i in range(d.size):
-            if d[(start_index + i) % d.size]:
+            if d[(start_index + i) % d.size] > LOOKAHEAD_DISTANCE:
                 break
         if i == d.size - 1:
             raise RuntimeError('Exhausted waypoints')
-        goal_index = start_index + i
+        goal_index = (start_index + i) % d.size
 
         # Transform goal point to vehicle frame of reference
         x_goal_base_link, y_goal_base_link = self.tfxy(
-            'map', 'base_link', self.waypoints_x[i], self.waypoints_y[i])
+            'map', 'ego_racecar/base_link', self.waypoints_x[goal_index], self.waypoints_y[goal_index])
+        if x_goal_base_link is None:
+            return
 
         # Calculate curvature/steering angle
         L = np.hypot(x_goal_base_link, y_goal_base_link)
-        gamma = -2*y_goal_base_link/L**2
+        gamma = 2*y_goal_base_link/L**2
         delta = np.arctan(WHEELBASE*gamma)
         self.angle = np.clip(delta, -MAX_STEER, MAX_STEER)
         
@@ -129,9 +138,6 @@ class PurePursuit(Node):
         self.pub_dynamic_viz.publish(marker_2)
         #self.get_logger().info('Published marker with current point ({}, {})'.format(point.x, point.y))
 
-
-    # TODO: publish drive message, don't forget to limit the steering angle.
-
     def reactive_control(self):
         ackermann_drive_result = AckermannDriveStamped()
         ackermann_drive_result.header.stamp = self.get_clock().now().to_msg()
@@ -142,21 +148,27 @@ class PurePursuit(Node):
             ackermann_drive_result.drive.speed = 1.0
         else:
             ackermann_drive_result.drive.speed = 1.5
+        # ackermann_drive_result.drive.speed = 0.0
         self.pub_drive.publish(ackermann_drive_result)
 
-    def tfxy(self, from_frame, to_frame, x_odom: float, y_odom: float) -> Tuple[float, float]:
-        p1 = PointStamped()
-        p1.header.frame_id = from_frame
-        p1.header.stamp = self.get_clock().now().to_msg()
-        p1.point.x = float(x_odom)
-        p1.point.y = float(y_odom)
-        p1.point.z = 0.0
-        p2 = self.tf_buffer.transform(
-            p1,
-            to_frame,
-            timeout=Duration(nanoseconds=200_000_000),
-        )
-        return p2.point.x, p2.point.y
+    def tfxy(self, from_frame, to_frame, x_from: float, y_from: float) -> Tuple[float, float]:
+        try:
+            p1 = PointStamped()
+            p1.header.frame_id = from_frame
+            p1.header.stamp = Time().to_msg()
+            p1.point.x = float(x_from)
+            p1.point.y = float(y_from)
+            p1.point.z = 0.0
+
+            p2 = self.tf_buffer.transform(
+                p1,
+                to_frame,
+                timeout=Duration(seconds=0.05),
+            )
+            return p2.point.x, p2.point.y
+        except tf2_ros.TransformException as e:
+            self.get_logger().warn(f"TF unavailable: {e}")
+            return None, None
 
 def main(args=None):
     rclpy.init(args=args)
