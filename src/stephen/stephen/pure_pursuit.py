@@ -19,7 +19,8 @@ import math
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 
 LOOKAHEAD_DISTANCE = 1.20
-CSV_PATH = Path.home() / 'sim_ws' / 'src' / 'particle_filter' / 'maps' / 'Austin_raceline.csv'
+# CSV_PATH = Path.home() / 'sim_ws' / 'src' / 'particle_filter' / 'maps' / 'Austin_raceline.csv'
+CSV_PATH = Path(__file__).resolve().parent.parent / 'pursuit' / 'data.csv'
 if not CSV_PATH.exists():
     raise RuntimeError("Waypoint file doesn't exist")
 WHEELBASE = 1.2
@@ -159,7 +160,6 @@ class PurePursuit(Node):
             p1.point.x = float(x_from)
             p1.point.y = float(y_from)
             p1.point.z = 0.0
-
             p2 = self.tf_buffer.transform(
                 p1,
                 to_frame,
