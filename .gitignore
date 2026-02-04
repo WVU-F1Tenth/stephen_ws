@@ -21,3 +21,4 @@ wheelhouse/
 *.swp
 *.tmp
 .DS_Store
+venv
