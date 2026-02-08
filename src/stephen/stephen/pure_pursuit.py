@@ -17,12 +17,16 @@ import tf2_geometry_msgs
 from rclpy.time import Time
 import math
 from rclpy.qos import QoSProfile, ReliabilityPolicy
+import os
 
-LOOKAHEAD_DISTANCE = 1.20
-# CSV_PATH = Path.home() / 'sim_ws' / 'src' / 'particle_filter' / 'maps' / 'Austin_raceline.csv'
-CSV_PATH = Path(__file__).resolve().parent.parent / 'pursuit' / 'data.csv'
+map_path = os.environ.get('MAP_PATH')
+if map_path is None:
+        raise RuntimeError('MAP_PATH not set')
+CSV_PATH = Path(map_path+'_raceline.csv')
 if not CSV_PATH.exists():
     raise RuntimeError("Waypoint file doesn't exist")
+
+LOOKAHEAD_DISTANCE = 1.20
 WHEELBASE = 1.2
 MAX_STEER = .42
 
@@ -62,9 +66,9 @@ class PurePursuit(Node):
         self.marker.color.g = 0.0
         self.marker.color.b = 1.0
 
-        df = pd.read_csv(CSV_PATH, header=None, comment='#', sep=';')
-        self.waypoints_x = df.iloc[:, 1].to_numpy(dtype=float)
-        self.waypoints_y = df.iloc[:, 2].to_numpy(dtype=float)
+        df = pd.read_csv(CSV_PATH, header=None, comment='#', sep=',')
+        self.waypoints_x = df.iloc[:, 0].to_numpy(dtype=float)
+        self.waypoints_y = df.iloc[:, 1].to_numpy(dtype=float)
         self.waypoints_heading = None
         self.marker.points = [Point(x=float(x), y=float(y), z=0.0)
                               for x, y in zip(self.waypoints_x, self.waypoints_y)]
