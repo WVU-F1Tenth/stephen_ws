@@ -29,6 +29,7 @@ if not CSV_PATH.exists():
 LOOKAHEAD_DISTANCE = 1.20
 WHEELBASE = 1.2
 MAX_STEER = .42
+VIS_RATE = 5.0
 
 class PurePursuit(Node):
     def __init__(self):
@@ -43,41 +44,42 @@ class PurePursuit(Node):
             reliability=ReliabilityPolicy.BEST_EFFORT
         )
         self.sub_odom = self.create_subscription(Odometry, '/ego_racecar/odom', self.pose_callback,  qos)
+        self.vis_timer = self.create_timer(1.0 / VIS_RATE, self.publish_markers)
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
         # Reading CSV data
-        self.marker = Marker()
-        self.marker.header.frame_id = "map"
-        self.marker.id = 0
-        self.marker.type = Marker.POINTS
-        self.marker.action = Marker.ADD
-        self.marker.pose.position.x = 0.0
-        self.marker.pose.position.y = 0.0
-        self.marker.pose.position.z = 0.0
-        self.marker.pose.orientation.x = 0.0
-        self.marker.pose.orientation.y = 0.0
-        self.marker.pose.orientation.z = 0.0
-        self.marker.pose.orientation.w = 1.0
-        self.marker.scale.x = 0.1
-        self.marker.scale.y = 0.1
-        self.marker.color.a = 1.0
-        self.marker.color.r = 0.0
-        self.marker.color.g = 0.0
-        self.marker.color.b = 1.0
-
-        df = pd.read_csv(CSV_PATH, header=None, comment='#', sep=',')
-        self.waypoints_x = df.iloc[:, 0].to_numpy(dtype=float)
-        self.waypoints_y = df.iloc[:, 1].to_numpy(dtype=float)
-        self.waypoints_heading = None
-        self.marker.points = [Point(x=float(x), y=float(y), z=0.0)
-                              for x, y in zip(self.waypoints_x, self.waypoints_y)]
+        self.path_marker = Marker()
+        self.path_marker.header.frame_id = "map"
+        self.path_marker.id = 0
+        self.path_marker.type = Marker.POINTS
+        self.path_marker.action = Marker.ADD
+        self.path_marker.pose.position.x = 0.0
+        self.path_marker.pose.position.y = 0.0
+        self.path_marker.pose.position.z = 0.0
+        self.path_marker.pose.orientation.x = 0.0
+        self.path_marker.pose.orientation.y = 0.0
+        self.path_marker.pose.orientation.z = 0.0
+        self.path_marker.pose.orientation.w = 1.0
+        self.path_marker.scale.x = 0.1
+        self.path_marker.scale.y = 0.1
+        self.path_marker.color.a = 1.0
+        self.path_marker.color.r = 0.0
+        self.path_marker.color.g = 0.0
+        self.path_marker.color.b = 1.0
+        self.path_published = False
 
         self.angle = 0.0
         self.x_odom = 0.0
         self.y_odom = 0.0
         self.heading_odom = 0.0
-        self.flag = False
+
+        df = pd.read_csv(CSV_PATH, header=None, comment='#', sep=',')
+        self.waypoints_x = df.iloc[:, 0].to_numpy(dtype=float)
+        self.waypoints_y = df.iloc[:, 1].to_numpy(dtype=float)
+        self.waypoints_heading = None
+        self.path_marker.points = [Point(x=float(x), y=float(y), z=0.0)
+                              for x, y in zip(self.waypoints_x, self.waypoints_y)]
 
     def pose_callback(self, odometry_info):
         self.x_odom = odometry_info.pose.pose.position.x
@@ -99,11 +101,11 @@ class PurePursuit(Node):
                 break
         if i == d.size - 1:
             raise RuntimeError('Exhausted waypoints')
-        goal_index = (start_index + i) % d.size
+        self.goal_index = (start_index + i) % d.size
 
         # Transform goal point to vehicle frame of reference
         x_goal_base_link, y_goal_base_link = self.tfxy(
-            'map', 'ego_racecar/base_link', self.waypoints_x[goal_index], self.waypoints_y[goal_index])
+            'map', 'ego_racecar/base_link', self.waypoints_x[self.goal_index], self.waypoints_y[self.goal_index])
         if x_goal_base_link is None:
             return
 
@@ -112,48 +114,49 @@ class PurePursuit(Node):
         gamma = 2*y_goal_base_link/L**2
         delta = np.arctan(WHEELBASE*gamma)
         self.angle = np.clip(delta, -MAX_STEER, MAX_STEER)
-        
-        # Visualization marker for current goal point
-        point = Point()
-        marker_2 = Marker()
-        point.x = self.waypoints_x[goal_index]
-        point.y = self.waypoints_y[goal_index]
-        point.z = 0.0
-        marker_2.points.append(point)
-        marker_2.header.frame_id = "map"
-        marker_2.id = 0
-        marker_2.type = Marker.POINTS
-        marker_2.action = Marker.ADD
-        marker_2.pose.position.x = 0.0
-        marker_2.pose.position.y = 0.0
-        marker_2.pose.position.z = 0.0
-        marker_2.pose.orientation.x = 0.0
-        marker_2.pose.orientation.y = 0.0
-        marker_2.pose.orientation.z = 0.0
-        marker_2.pose.orientation.w = 1.0
-        marker_2.scale.x = 0.2
-        marker_2.scale.y = 0.2
-        marker_2.color.a = 1.0
-        marker_2.color.r = 1.0
-        marker_2.color.g = 0.0
-        marker_2.color.b = 0.0
 
         self.reactive_control()
-        self.pub_env_viz.publish(self.marker)
-        self.pub_dynamic_viz.publish(marker_2)
-        #self.get_logger().info('Published marker with current point ({}, {})'.format(point.x, point.y))
+        
+    def publish_markers(self):
+        # Visualization marker for current goal point
+        point = Point()
+        goal_marker = Marker()
+        point.x = self.waypoints_x[self.goal_index]
+        point.y = self.waypoints_y[self.goal_index]
+        point.z = 0.0
+        goal_marker.points.append(point)
+        goal_marker.header.frame_id = "map"
+        goal_marker.id = 1
+        goal_marker.type = Marker.POINTS
+        goal_marker.action = Marker.ADD
+        goal_marker.pose.position.x = 0.0
+        goal_marker.pose.position.y = 0.0
+        goal_marker.pose.position.z = 0.0
+        goal_marker.pose.orientation.x = 0.0
+        goal_marker.pose.orientation.y = 0.0
+        goal_marker.pose.orientation.z = 0.0
+        goal_marker.pose.orientation.w = 1.0
+        goal_marker.scale.x = 0.2
+        goal_marker.scale.y = 0.2
+        goal_marker.color.a = 1.0
+        goal_marker.color.r = 1.0
+        goal_marker.color.g = 0.0
+        goal_marker.color.b = 0.0
+
+        if not self.path_published:
+            self.pub_env_viz.publish(self.path_marker)
+        self.pub_dynamic_viz.publish(goal_marker)
 
     def reactive_control(self):
         ackermann_drive_result = AckermannDriveStamped()
         ackermann_drive_result.header.stamp = self.get_clock().now().to_msg()
         ackermann_drive_result.drive.steering_angle = self.angle
         if abs(self.angle) > np.radians(20.0):
-            ackermann_drive_result.drive.speed = 0.5
+            ackermann_drive_result.drive.speed = 2.0
         elif abs(self.angle) > np.radians(10.0):
-            ackermann_drive_result.drive.speed = 1.0
+            ackermann_drive_result.drive.speed = 4.0
         else:
-            ackermann_drive_result.drive.speed = 1.5
-        # ackermann_drive_result.drive.speed = 0.0
+            ackermann_drive_result.drive.speed = 6.0
         self.pub_drive.publish(ackermann_drive_result)
 
     def tfxy(self, from_frame, to_frame, x_from: float, y_from: float) -> Tuple[float, float]:
