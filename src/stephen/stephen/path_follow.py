@@ -33,8 +33,8 @@ import threading
 
 publish_marker = True
 publish_virtual_scan = True
-publish_v2 = True
-file_output = True
+publish_v2 = False
+file_output = False
 fast_print = False
 
 cycle_time = 1e-5
@@ -80,17 +80,12 @@ class PathFollow(Node):
         self.turning_radius = self.wheelbase/math.tan(self.max_steering_angle)
 
         # Path
-        self.map = Map(
+        self.planner = Planner(
             disparity_threshold=0.5,
             extension=0.35,
-            steering_extension=0.0,
             min_gap_width=self.car_radius,
             max_steering_angle=self.max_steering_angle,
-            track_direction='ccw',
-            # | disparity | center |
-            steering_method='disparity',
-            # | max_gap | furthest |
-            path_method='furthest'
+            track_direction='ccw'
             )
         
         global smoothing_exp
@@ -161,8 +156,8 @@ class PathFollow(Node):
         adjust_start = start_time
         overhead_time = (start_time - self.overhead_start) * 1_000
 
-        if not self.map.is_set:
-            self.map.setup(scan)
+        if not self.planner.is_set:
+            self.planner.setup(scan)
             print('Running...')
         
         if fast_print:
@@ -180,23 +175,19 @@ class PathFollow(Node):
 
         #self.path.apply_range_limit(ranges, 10.0)
 
-        extensions = self.map.get_virtual(ranges)
+        virtual = self.planner.get_virtual(ranges)
         
-        pos_disps, neg_disps = self.map.disparities(ranges)
-        disps = np.concatenate((pos_disps, neg_disps))
+        pos_disps, neg_disps = self.planner.disparities(ranges)
 
-        pos_ext_disps, neg_ext_disps = self.map.disparities(extensions)
-        ext_disps = np.concatenate((pos_ext_disps, neg_ext_disps))
+        paths: list[Path] = self.planner.get_paths(ranges, pos_disps, neg_disps)
 
-        paths = self.map.get_paths(ranges, pos_disps, neg_disps)
-
-        path = self.map.choose(paths)
+        path: Path = self.planner.choose(paths)
 
         if path is None:
             steering_angle = self.prev_steering_angle
             speed = self.prev_speed
         else:
-            steering_angle = self.map.steering(path)
+            steering_angle = self.planner.steering(path)
 
             steering_angle = self.smooth.get(steering_angle, self.prev_speed)
 
@@ -218,7 +209,7 @@ class PathFollow(Node):
             self.scan_pub.publish(scan)
         if publish_v2:
             msg = Float32MultiArray()
-            msg.data = extensions.tolist()
+            msg.data = virtual.tolist()
             self.v2_pub.publish(msg)
         if (publish_marker):
             # Marker
@@ -265,27 +256,20 @@ class PathFollow(Node):
         self.overhead_start = perf_counter()
 
 class Path:
-    def __init__(self, disp, depth=None, ext=None, disp_radius=None,
-                  ext_width=None, ext_index_width=None, ext_depth=None):
-        self.disp = disp
-        self.depth = depth
-        disp_radius = disp_radius
-        self.v_width = ext_width
-        self.v_index_width = ext_index_width
-        self.ext = ext
-        self.ext_depth = ext_depth
+    def __init__(self, disp_index, disp_depth=None, disp_radius=None, block_widths=None, block_depths=None):
+        self.disp_index = disp_index # disparity point
+        self.disp_depth = disp_depth # distance to disparity point
+        disp_radius = disp_radius # maximum radius of free space around disparity point
+        self.block_widths = block_widths # right and left block widths 
+        self.block_depths = block_depths # right and left block depths
 
-class Map:
-    def __init__(self, disparity_threshold, extension, steering_extension,
-                  min_gap_width, track_direction, max_steering_angle, steering_method, path_method):
-        self.disparity_threshold = disparity_threshold
-        self.extension = extension
-        self.steering_extension = steering_extension
-        self.min_gap_width = min_gap_width
-        self.track_direction = track_direction
-        self.max_steering_angle = max_steering_angle
-        self.steering_method = steering_method
-        self.path_method = path_method
+class Planner:
+    def __init__(self, disparity_threshold, extension, min_gap_width, track_direction, max_steering_angle):
+        self.disparity_threshold = disparity_threshold # threshold defining disparity
+        self.extension = extension # wall extension distance
+        self.min_gap_width = min_gap_width # minimum viable gap width
+        self.track_direction = track_direction # ccw or cw
+        self.max_steering_angle = max_steering_angle # maximum allowed steering angle
         self.is_set = False
 
     def apply_range_limit(self, ranges, limit):
@@ -306,105 +290,50 @@ class Map:
         col_mins = range_matrix.min(axis=0)
         return col_mins
     
-    def get_ggg(self, ranges, extensions, pos_disps, neg_disps):
+    def resolve_disparities(self, ranges, virtual, pos_disps, neg_disps):
         for disp in pos_disps:
             # Walk gap until intersection
             disp_range = ranges[disp]
-            points = np.flatnonzero((ranges[disp+1:] <= disp_range) | (extensions[disp+1:] > disp_range))
+            points = np.flatnonzero((ranges[disp+1:] <= disp_range) | (virtual[disp+1:] > disp_range))
             if points.size:
                 left_intersect = points[0] + disp + 1
             else:
                 continue
             # Drop to intersection range
-            if extensions[left_intersect] > disp_range:
+            if virtual[left_intersect] > disp_range:
                 left_intersect -= 1
-                new_ext = extensions[left_intersect]
+                new_ext = virtual[left_intersect]
             else:
                 new_ext = disp_range
             # Backtrack until second intersection
-            points = np.flatnonzero((ranges[:disp] <= new_ext) | (extensions[:disp] > new_ext))
+            points = np.flatnonzero((ranges[:disp] <= new_ext) | (virtual[:disp] > new_ext))
             right_intersect = points[-1] if points.size else disp
-            if extensions[right_intersect] > new_ext:
+            if virtual[right_intersect] > new_ext:
                 right_intersect += 1
-            ranges_slice = ranges[right_intersect: left_intersect + 1]
-            np.minimum(ranges_slice, new_ext, out=ranges_slice)
+            ranges_section = ranges[right_intersect: left_intersect + 1]
+            np.minimum(ranges_section, new_ext, out=ranges_section)
 
         for disp in neg_disps:
             # Walk gap until intersection
             disp_range = ranges[disp]
-            points = np.flatnonzero((ranges[:disp] <= disp_range) | (extensions[:disp] > disp_range))
+            points = np.flatnonzero((ranges[:disp] <= disp_range) | (virtual[:disp] > disp_range))
             if points.size:
                 right_intersect = points[-1]
             else:
                 continue
             # Drop to intersection range
-            if extensions[right_intersect] > disp_range:
+            if virtual[right_intersect] > disp_range:
                 right_intersect += 1
-                new_ext = extensions[right_intersect]
+                new_ext = virtual[right_intersect]
             else:
                 new_ext = disp_range
             # Backtrack until second intersection
-            points = np.flatnonzero((ranges[disp+1:] <= new_ext) | (extensions[disp+1:] > new_ext))
+            points = np.flatnonzero((ranges[disp+1:] <= new_ext) | (virtual[disp+1:] > new_ext))
             left_intersect = points[0] + disp + 1 if points.size else disp
-            if extensions[left_intersect] > new_ext:
+            if virtual[left_intersect] > new_ext:
                 left_intersect -= 1
-            ranges_slice = ranges[right_intersect: left_intersect + 1]
-            np.minimum(ranges_slice, new_ext, out=ranges_slice)
-
-            return None
-    
-    def disparity_extend2(self, ranges, extensions):
-
-        # Maybe use min gap because not all points extended (wall of curvature)
-        # Roughly Parallel disps fluctuate causing random switching when in same choice section
-
-        global disparity_threshold
-        diffs = np.diff(ranges)
-        # Disps are wall points
-        pos_disps = np.flatnonzero(diffs >= disparity_threshold)
-        neg_disps = np.flatnonzero(diffs <= -disparity_threshold) + 1
-        for disp in pos_disps:
-            # Walk gap until intersection
-            disp_range = ranges[disp]
-            points = np.flatnonzero((ranges[disp+1:] <= disp_range) | (extensions[disp+1:] > disp_range))
-            if points.size:
-                left_intersect = points[0] + disp + 1
-            else:
-                continue
-            # Drop to intersection range
-            if extensions[left_intersect] > disp_range:
-                left_intersect -= 1
-                new_ext = extensions[left_intersect]
-            else:
-                new_ext = disp_range
-            # Backtrack until second intersection
-            points = np.flatnonzero((ranges[:disp] <= new_ext) | (extensions[:disp] > new_ext))
-            right_intersect = points[-1] if points.size else disp
-            if extensions[right_intersect] > new_ext:
-                right_intersect += 1
-            ranges_slice = ranges[right_intersect: left_intersect + 1]
-            np.minimum(ranges_slice, new_ext, out=ranges_slice)
-        for disp in neg_disps:
-            # Walk gap until intersection
-            disp_range = ranges[disp]
-            points = np.flatnonzero((ranges[:disp] <= disp_range) | (extensions[:disp] > disp_range))
-            if points.size:
-                right_intersect = points[-1]
-            else:
-                continue
-            # Drop to intersection range
-            if extensions[right_intersect] > disp_range:
-                right_intersect += 1
-                new_ext = extensions[right_intersect]
-            else:
-                new_ext = disp_range
-            # Backtrack until second intersection
-            points = np.flatnonzero((ranges[disp+1:] <= new_ext) | (extensions[disp+1:] > new_ext))
-            left_intersect = points[0] + disp + 1 if points.size else disp
-            if extensions[left_intersect] > new_ext:
-                left_intersect -= 1
-            ranges_slice = ranges[right_intersect: left_intersect + 1]
-            np.minimum(ranges_slice, new_ext, out=ranges_slice)
+            ranges_section = ranges[right_intersect: left_intersect + 1]
+            np.minimum(ranges_section, new_ext, out=ranges_section)
 
     def disparities(self, ranges):
         global disparity_threshold
@@ -413,9 +342,16 @@ class Map:
         neg_disp = np.flatnonzero(diffs <= -disparity_threshold)
         return (pos_disp, neg_disp + 1)
     
-    def get_paths(self, ranges, pos_disps, neg_disps):
-        paths = []
-    
+    def get_paths(self, ranges, virtual, pos_disps, neg_disps):
+        # Get disp_radii and filter
+        radii = []
+        for disp in pos_disps:
+            end = 
+            radii.append(np.min(np.sqrt(ranges[disp]**2 + ranges[])))
+            
+
+
+        
     def gaps(self, ranges, pos_disps, neg_disps):
         widths = []
         depths = []
@@ -472,24 +408,16 @@ class Map:
         print('No path...')
         return None, None, None
 
-    def check_gap(self, starts, widths, depths, index_range):
+    def check_gap(self, starts, depths, index_range):
         lo, hi = index_range
         mask = (starts >= lo) & (starts <= hi)
         if not np.any(mask):
             return None
         local_map = np.where(mask)[0]
-        if self.path_method == 'furthest':
-            section_depths = depths[mask]
-            local_gap_idx = np.nanargmax(section_depths)
-            gap_idx = local_map[local_gap_idx]
-            return gap_idx
-        elif self.path_method == 'max_gap':
-            section_widths = widths[mask]
-            local_gap_idx = np.nanargmax(section_widths)
-            gap_idx = local_map[local_gap_idx]
-            return gap_idx
-        else:
-            raise ValueError('Invalid path_method')
+        section_depths = depths[mask]
+        local_gap_idx = np.nanargmax(section_depths)
+        gap_idx = local_map[local_gap_idx]
+        return gap_idx
         
     def steering(self, start: int, width: float, depth: float):
         if width > 0: sign = 1

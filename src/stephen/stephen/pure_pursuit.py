@@ -27,8 +27,8 @@ if not CSV_PATH.exists():
     raise RuntimeError("Waypoint file doesn't exist")
 
 LOOKAHEAD_DISTANCE = 1.20
-WHEELBASE = 1.2
-MAX_STEER = .42
+WHEELBASE = 0.3
+MAX_STEER = 0.42
 VIS_RATE = 5.0
 
 class PurePursuit(Node):
@@ -145,6 +145,7 @@ class PurePursuit(Node):
 
         if not self.path_published:
             self.pub_env_viz.publish(self.path_marker)
+            self.path_published = True
         self.pub_dynamic_viz.publish(goal_marker)
 
     def reactive_control(self):
