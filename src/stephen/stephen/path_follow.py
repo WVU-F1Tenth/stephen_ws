@@ -69,24 +69,26 @@ class PathFollow(Node):
             self.timer = self.create_timer(0.025, self.adjust_wrapper)
         self.overhead_start = 0.0
         self.cycle_start = perf_counter()
-        self.scan = None
         self.prev_speed = 0.0
         self.prev_steering_angle = 0.0
 
-        # Constants
-        self.car_radius = 0.
-        self.wheelbase = 0.33
-        self.max_steering_angle = 0.42
-        self.turning_radius = self.wheelbase/math.tan(self.max_steering_angle)
 
-        # Path
+        Vehicle.setup(
+            wheelbase=0.33,
+            radius=0.5,
+            max_steering_angle = 0.4
+        )
+
         self.planner = Planner(
             disparity_threshold=0.5,
-            extension=0.35,
-            min_gap_width=self.car_radius,
-            max_steering_angle=self.max_steering_angle,
+            extension=0.3,
             track_direction='ccw'
             )
+        
+        self.steering = Steering(
+            # | arc | line |
+            method='arc'
+        )
         
         global smoothing_exp
         # Smoothing functions domain and range [0, 1]
@@ -105,7 +107,6 @@ class PathFollow(Node):
             use_filter=False,
             use_pid=False,
             use_slew=False,
-            limit=self.max_steering_angle,
             tau=.05,
             slew_rate=5.0,
             pid=PID(
@@ -127,14 +128,11 @@ class PathFollow(Node):
             max_speed=100.0,
             a_slide=14.0,
             a_tip=10000.0,
-            wheelbase=self.wheelbase,
-            max_turning_angle=self.max_steering_angle,
-            extension=0.2
             )
 
         # File output
         if file_output:
-            file_info.other['turning_radius'] = self.turning_radius
+            file_info.other['turning_radius'] = Vehicle.turning_radius
             file_info.virtual_scan_info['max_range'] = 0.0
             file_info.virtual_scan_info['min_range'] = math.inf
             file_info.path_info['max_range'] = 0.0
@@ -156,8 +154,8 @@ class PathFollow(Node):
         adjust_start = start_time
         overhead_time = (start_time - self.overhead_start) * 1_000
 
-        if not self.planner.is_set:
-            self.planner.setup(scan)
+        if not Scan.initialized:
+            Scan.setup(scan)
             print('Running...')
         
         if fast_print:
@@ -173,25 +171,28 @@ class PathFollow(Node):
         
         pipeline_start = perf_counter()
 
-        #self.path.apply_range_limit(ranges, 10.0)
+        # self.planner.apply_range_limit(ranges, 10.0)
 
         virtual = self.planner.get_virtual(ranges)
         
         pos_disps, neg_disps = self.planner.disparities(ranges)
 
-        paths: list[Path] = self.planner.get_paths(ranges, pos_disps, neg_disps)
+        pos_disps, neg_disps = self.planner.get_paths(ranges, virtual, pos_disps, neg_disps)
 
-        path: Path = self.planner.choose(paths)
+        # choose should be based on pre-resolve ranges
+        goal_idx, sign = self.planner.choose(ranges, pos_disps, neg_disps)
+        goal_depth = ranges[goal_idx]
 
-        if path is None:
+        if goal_idx is None:
+            print('NO GOAL POINT')
             steering_angle = self.prev_steering_angle
             speed = self.prev_speed
         else:
-            steering_angle = self.planner.steering(path)
+            steering_angle = self.steering.get(goal_idx, sign, goal_depth)
 
             steering_angle = self.smooth.get(steering_angle, self.prev_speed)
 
-            speed = self.speed.get(steering_angle, path.depth + self.car_radius - self.turning_radius)
+            speed = self.speed.get(steering_angle,  goal_depth + Vehicle.radius - Vehicle.turning_radius)
             self.prev_speed = speed
         
         pipeline_time = (perf_counter() - pipeline_start) * 1_000
@@ -255,22 +256,93 @@ class PathFollow(Node):
 
         self.overhead_start = perf_counter()
 
-class Path:
-    def __init__(self, disp_index, disp_depth=None, disp_radius=None, block_widths=None, block_depths=None):
-        self.disp_index = disp_index # disparity point
-        self.disp_depth = disp_depth # distance to disparity point
-        disp_radius = disp_radius # maximum radius of free space around disparity point
-        self.block_widths = block_widths # right and left block widths 
-        self.block_depths = block_depths # right and left block depths
+class Vehicle:
 
+    @classmethod
+    def setup(cls, wheelbase, radius, max_steering_angle):
+        cls.wheelbase = wheelbase
+        cls.radius = radius
+        cls.max_steering_angle = max_steering_angle
+        cls.turning_radius = cls.wheelbase/math.tan(cls.max_steering_angle)
+
+class Scan:
+
+    initialized = False
+
+    @classmethod
+    def valid_scan(cls, scan):
+        is_valid = True
+        # Check size
+        if cls.size != len(scan.ranges):
+            print(f'len(scan.ranges = {len(scan.ranges)}, expected {cls.size})')
+            is_valid = False
+        for key in cls.__dict__:
+            # Check for other differences
+            if getattr(scan, key, None) and cls.__dict__[key] != getattr(scan, key):
+                print(f'Invalid: scan.{key} = {getattr(scan, key)}, expected {cls.__dict__[key]}')
+                is_valid = False
+        return is_valid
+    
+    @classmethod
+    def setup(cls, scan):
+        cls.initialized = True
+        cls.size = len(scan.ranges)
+
+        # Scan message attributes
+        cls.angle_min = scan.angle_min
+        cls.angle_max = scan.angle_max
+        assert scan.angle_max == abs(scan.angle_min)
+        cls.angle_increment = scan.angle_increment
+        cls.time_increment = scan.time_increment
+        cls.scan_time = scan.scan_time
+        cls.range_min = scan.range_min
+        cls.range_max = scan.range_max
+
+        cls.increment = cls.angle_increment
+        cls.index_to_angle_array = np.arange(cls.size)*cls.increment + cls.angle_min
+        cls.fov = cls.angle_max - cls.angle_min
+        if file_output:
+            for key, value in cls.__dict__.items():
+                file_info.path_info[key] = value
+    
+    @classmethod
+    def angle_to_index(cls, angle):
+        abs_angle = angle + cls.angle_min
+        total_angle = cls.angle_max - cls.angle_min
+        return round(cls.size * (abs_angle / total_angle))
+    
+    @classmethod
+    def index_to_angle(cls, index):
+        return cls.index_to_angle_array[index]
+    
+    @classmethod
+    def index_to_degrees(cls, index):
+        return round(math.degrees(cls.index_to_angle(index)), 4)
+    
+    @classmethod
+    def fov_slice(cls, ranges, fov):
+        fov = math.radians(fov)
+        fov_offset = cls.angle_to_index(-fov / 2)
+        return ranges[fov_offset: len(ranges) - fov_offset]
+    
+    @classmethod
+    def revert_fov_indexes(cls, fov, indexes):
+        fov = math.radians(fov)
+        reverted = []
+        for i in indexes:
+            reverted.append(i + round((cls.fov - fov) / (2 * cls.increment)))
+        return reverted
+    
+    @classmethod
+    def span_to_angle(cls, span, depth):
+        return 2 * math.asin(span / (2 * depth))
+    
 class Planner:
-    def __init__(self, disparity_threshold, extension, min_gap_width, track_direction, max_steering_angle):
+
+    def __init__(self, disparity_threshold, extension, track_direction):
         self.disparity_threshold = disparity_threshold # threshold defining disparity
         self.extension = extension # wall extension distance
-        self.min_gap_width = min_gap_width # minimum viable gap width
         self.track_direction = track_direction # ccw or cw
-        self.max_steering_angle = max_steering_angle # maximum allowed steering angle
-        self.is_set = False
 
     def apply_range_limit(self, ranges, limit):
         safe_gap_value = 100.0
@@ -282,7 +354,7 @@ class Planner:
         range_matrix = np.full((n, n), np.inf, dtype=np.float32)
         ratio = extension / (2 * ranges)
         ratio = np.clip(ratio, -1.0, 1.0)
-        index_extensions = abs(np.floor(2*np.arcsin(ratio)/self.angle_increment).astype(np.int32))
+        index_extensions = abs(np.floor(2*np.arcsin(ratio)/Scan.angle_increment).astype(np.int32))
         rows = np.arange(n)[:, None]
         cols = np.arange(n)[None, :]
         mask = np.abs(cols-rows) <= index_extensions[:, None]
@@ -343,51 +415,38 @@ class Planner:
         return (pos_disp, neg_disp + 1)
     
     def get_paths(self, ranges, virtual, pos_disps, neg_disps):
-        # Get disp_radii and filter
-        radii = []
+        # Satisfiability: 1. disp radius, 2. arc path, 3. minimum arc radius
+        # Filter by disp radius
+        valid_pos_disps = []
         for disp in pos_disps:
-            end = 
-            radii.append(np.min(np.sqrt(ranges[disp]**2 + ranges[])))
+            start = disp + 1
+            end = disp + 2 * Scan.angle_to_index(Scan.span_to_angle(self.extension, ranges[disp]))
+            section = slice(start, end + 1)
+            min_radius = np.min(np.sqrt(
+                ranges[disp]**2 + ranges[section]**2 - 2 * ranges[disp] * ranges[section]))
+            if min_radius > 2 * self.extension:
+                valid_pos_disps.append(disp)
+
+        valid_neg_disps = []
+        for disp in neg_disps:
+            start = disp - 1
+            end = disp - 2 * Scan.angle_to_index(Scan.span_to_angle(self.extension, ranges[disp]))
+            section = slice(end, start + 1)
+            min_radius = np.min(np.sqrt(
+                ranges[disp]**2 + ranges[section]**2 - 2 * ranges[disp] * ranges[section]))
+            if min_radius > 2 * self.extension:
+                valid_neg_disps.append(disp)
             
+        self.resolve_disparities(ranges, virtual, pos_disps, neg_disps)
 
+        pos_disps, neg_disps = self.disparities(ranges)
 
-        
-    def gaps(self, ranges, pos_disps, neg_disps):
-        widths = []
-        depths = []
-        for i in pos_disps:
-            disp_range = ranges[i]
-            index_count = 0
-            j = i + 1
-            while j < ranges.size and ranges[j] > disp_range:
-                index_count += 1
-                j += 1
-            # Calculate distance
-            theta = index_count * self.increment
-            dist = 2 * math.sin(theta / 2) * disp_range
-            widths.append(dist)
-            depths.append(disp_range)
-        for i in neg_disps:
-            disp_range = ranges[i]
-            index_count = 0
-            j = i - 1
-            while j >= 0 and ranges[j] > disp_range:
-                index_count += 1
-                j -= 1
-            # Calculate distance
-            theta = index_count * self.increment
-            dist = 2 * math.sin(theta / 2) * disp_range
-            widths.append(-dist)
-            depths.append(disp_range)
-        widths, depths = np.array(widths), np.array(depths)
-        return widths, depths
+        return pos_disps, neg_disps
 
-    def choose(self, starts, widths, depths):
-        left = 1
-        right = -1
+    def choose(self, ranges, pos_disps, neg_disps):
         # HARDCODED
         steps = (0, 90, 180, 360, 539)
-        N = self.size
+        N = Scan.size
         right_start = int(N/2 - 1) if N % 2 == 0 else int(N/2)
         left_start = int(N/2)
         right_sections = [(right_start - steps[i+1], right_start - steps[i]) for i in (range(len(steps) - 1))]
@@ -401,109 +460,57 @@ class Planner:
             raise ValueError('Invalid track_direction')
         # Prevents sudden choice swapping due to dead on heading, also mid index
         sections.insert(1, (530, 550))
-        for section in sections:
-            gap_idx = self.check_gap(starts, widths, depths, section)
-            if not gap_idx is None:
-                    return (starts[gap_idx], widths[gap_idx], depths[gap_idx])
-        print('No path...')
-        return None, None, None
 
-    def check_gap(self, starts, depths, index_range):
-        lo, hi = index_range
-        mask = (starts >= lo) & (starts <= hi)
+        for section in sections:
+            goal_idx, sign = self.check_gap(ranges, pos_disps, neg_disps, section)
+            if not goal_idx is None:
+                    return goal_idx, sign
+        print('No path...')
+        return None, None
+
+    def check_gap(self, ranges, pos_disps, neg_disps, section):
+        lo, hi = section
+        disps = np.concatenate(neg_disps, pos_disps)
+        mask = (disps >= lo) & (disps <= hi)
         if not np.any(mask):
-            return None
+            return None, None
         local_map = np.where(mask)[0]
-        section_depths = depths[mask]
-        local_gap_idx = np.nanargmax(section_depths)
-        gap_idx = local_map[local_gap_idx]
-        return gap_idx
-        
-    def steering(self, start: int, width: float, depth: float):
-        if width > 0: sign = 1
-        elif width < 0: sign = -1
-        else: raise ValueError('Invalid path steering length of 0')
-        # if self.steering_extension > 2 * depth: # Validate asin domain
-        #     return 0.0
-        # ext_index_width = round(2 * math.asin(self.steering_extension / (2 * depth)) / self.increment)
-        index_width = round(2 * math.asin(abs(width) / (2 * depth)) / self.increment)
-        if self.steering_method == 'center':
-            steering_idx = start + (sign * index_width / 2)
-            steering_angle = self.index_to_angle(steering_idx)
-        elif self.steering_method == 'disparity':
-            # steering_idx = start + sign * ext_index_width
-            steering_idx = start
-            steering_angle = self.index_to_angle(steering_idx)
+        section_ranges = ranges[local_map]
+        local_goal_idx = np.nanargmax(section_ranges)
+        goal_idx = local_map[local_goal_idx]
+        sign = 1 if goal_idx in pos_disps else 0
+        return goal_idx, sign
+
+class Steering:
+
+    def __init__(self, method):
+        if method == 'arc':
+            self.get = self.get_arc_angle
+        elif method == 'line':
+            self.get = self.get_line_angle
         else:
             raise ValueError('Invalid steering method')
-        return steering_angle
+        
+    def get_arc_angle(self, disp, sign, depth):
+        theta = Scan.index_to_angle(disp)
+        y = math.cos(theta)
+        gamma = 2 * y / depth**2
+        delta = np.arctan(Vehicle.wheelbase * gamma)
+        self.angle = np.clip(delta, -Vehicle.max_steering_angle, Vehicle.max_steering_angle)
 
-    def valid_scan(self, scan):
-        is_valid = True
-        # Check size
-        if self.size != len(scan.ranges):
-            print(f'len(scan.ranges = {len(scan.ranges)}, expected {self.size})')
-            is_valid = False
-        for key in self.__dict__:
-            # Check for other differences
-            if getattr(scan, key, None) and self.__dict__[key] != getattr(scan, key):
-                print(f'Invalid: scan.{key} = {getattr(scan, key)}, expected {self.__dict__[key]}')
-                is_valid = False
-        return is_valid
+    def get_line_angle(self, disp, sign, depth):
+        raise NotImplementedError()
 
-    def setup(self, scan):
-        self.is_set = True
-        self.size = len(scan.ranges)
-
-        # Scan message attributes
-        self.angle_min = scan.angle_min
-        self.angle_max = scan.angle_max
-        assert scan.angle_max == abs(scan.angle_min)
-        self.angle_increment = scan.angle_increment
-        self.time_increment = scan.time_increment
-        self.scan_time = scan.scan_time
-        self.range_min = scan.range_min
-        self.range_max = scan.range_max
-
-        self.increment = self.angle_increment
-        self.index_to_angle_array = np.arange(self.size)*self.increment + self.angle_min
-        self.fov = self.angle_max - self.angle_min
-        if file_output:
-            for key, value in self.__dict__.items():
-                file_info.path_info[key] = value
-
-    def angle_to_index(self, angle):
-        abs_angle = angle + self.angle_min
-        total_angle = self.angle_max - self.angle_min
-        return round(self.size * (abs_angle / total_angle))
-
-    def index_to_angle(self, index):
-        return self.index_to_angle_array[index]
-
-    def index_to_degrees(self, index):
-        return round(math.degrees(self.index_to_angle(index)), 4)
-
-    def fov_slice(self, ranges, fov):
-        fov = math.radians(fov)
-        fov_offset = self.angle_to_index(-fov / 2)
-        return ranges[fov_offset: len(ranges) - fov_offset]
-    
-    def revert_fov_indexes(self, fov, indexes):
-        fov = math.radians(fov)
-        reverted = []
-        for i in indexes:
-            reverted.append(i + round((self.fov - fov) / (2 * self.increment)))
-        return reverted
-    
 class Smooth:
-    def __init__(self, func, use_filter, use_pid, use_slew, limit, tau, slew_rate, pid):
+
+    def __init__(self, func, use_filter, use_pid, use_slew, tau, slew_rate, pid):
         self.func = func
         self.use_filter = use_filter
         self.use_pid = use_pid
         self.use_slew = use_slew
-        self.limit = limit
+        self.limit = Vehicle.max_steering_angle
         self.pid = pid
-        self.pid.output_limits = (-limit, limit)
+        self.pid.output_limits = (-self.limit, self.limit)
         self.start_time = 0.0
         # Max time interval
         self.max_dt = .1
@@ -561,21 +568,17 @@ class Smooth:
         return target
         
 class Speed:
-    # Method:
-    #     1. flat - gets flat speed
-    #     2. fast - uses steering angle and gap_depth
 
-    def __init__(self, method, flat_speed, max_speed, a_slide, a_tip, wheelbase, max_turning_angle, extension):
+    def __init__(self, method, flat_speed, max_speed, a_slide, a_tip):
         self.flat_speed = flat_speed
-        self.min_speed = math.sqrt(min(a_slide, a_tip) * wheelbase / math.tan(max_turning_angle))
+        self.min_speed = math.sqrt(min(a_slide, a_tip) * Vehicle.wheelbase / math.tan(Vehicle.max_steering_angle))
         file_info.other['min_speed'] = self.min_speed
         self.max_speed = max_speed
         self.a_slide = a_slide
         self.a_tip = a_tip
-        self.wheelbase = wheelbase
-        self.max_turning_angle = max_turning_angle
-        self.extension = extension
-        self.turning_radius = wheelbase / math.tan(max_turning_angle)
+        self.wheelbase = Vehicle.wheelbase
+        self.max_turning_angle = Vehicle.max_steering_angle
+        self.turning_radius = Vehicle.wheelbase / math.tan(Vehicle.max_steering_angle)
         self.last_speed = 0.0
 
         if method == 'flat':
@@ -596,7 +599,7 @@ class Speed:
             print('FAILED SPEED')
             return 0.0
         v_min = self.min_speed
-        s = gap_depth + self.extension
+        s = gap_depth
         if s < 0:
             print('Zero depth path...')
             return 0.0
@@ -653,8 +656,7 @@ def input_thread():
         elif cmd == 'x':
             print('stopped')
             flat_speed = 0.0
-        
-                
+                       
 def handler(sig, frame):
     if file_output:
         for key, value in file_info.mean_times.items():
