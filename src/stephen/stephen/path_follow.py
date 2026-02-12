@@ -37,7 +37,7 @@ VISUAL_HERTZ = 5.0
 FILE_OUTPUT = False
 FAST_PRINT = False
 
-FLAT_SPEED = 0.0
+FLAT_SPEED = 1.0
 SMOOTHING_EXP = 2.0
 DISPARITY_THRESHOLD = 0.5
 
@@ -87,7 +87,7 @@ class PathFollow(Node):
         
         self.steering = Steering(
             # | arc | line |
-            method='line'
+            method='arc'
         )
         
         # Smoothing
@@ -141,6 +141,8 @@ class PathFollow(Node):
 
         if not Scan.initialized:
             Scan.setup(scan)
+            self.v1 = np.zeros(Scan.size)
+            self.v2 = np.zeros(Scan.size)
             print('Running...')
         
         if FAST_PRINT:
@@ -159,10 +161,14 @@ class PathFollow(Node):
         # self.planner.apply_range_limit(ranges, 10.0)
 
         virtual = self.planner.get_virtual(ranges)
+
+        self.v2[:] = virtual
         
         pos_disps, neg_disps = self.planner.disparities(ranges)
 
         pos_disps, neg_disps = self.planner.get_paths(ranges, virtual, pos_disps, neg_disps)
+
+        self.v1[:] = ranges
 
         # choose should be based on pre-resolve ranges
         goal_idx, sign = self.planner.choose(ranges, pos_disps, neg_disps)
