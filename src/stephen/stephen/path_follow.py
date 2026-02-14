@@ -30,14 +30,17 @@ import threading
 # - Create tracking line for sim to compare paths
 
 HERTZ = 40.0
-PUBLISH_STEERING_MARKER = True
+VISUALS = True
+LINE_STEERING_MARKER = True
+ARC_STEERING_MARKER = False
+GOAL_POINT_MARKER = True
 PUBLISH_V1 = True
-PUBLISH_V2 = False
+PUBLISH_V2 = True
 VISUAL_HERTZ = 5.0
 FILE_OUTPUT = False
 FAST_PRINT = False
 
-FLAT_SPEED = 1.0
+FLAT_SPEED = 0.0
 SMOOTHING_EXP = 2.0
 DISPARITY_THRESHOLD = 0.5
 
@@ -59,23 +62,29 @@ class PathFollow(Node):
         else:
             self.laser_scan_sub = self.create_subscription(LaserScan, '/scan', self.save_scan, 10)
             self.timer = self.create_timer(1.0 / HERTZ, self.adjust_wrapper)
-        if PUBLISH_STEERING_MARKER or PUBLISH_V2 or PUBLISH_V1:
+        if  VISUALS:
             self.create_timer(1.0 / VISUAL_HERTZ, self.publish_markers)
         if PUBLISH_V1:
             self.v1_pub = self.create_publisher(Float32MultiArray, '/v1_ranges', 10)
         if PUBLISH_V2:
             self.v2_pub = self.create_publisher(Float32MultiArray, '/v2_ranges', 10)
-        if PUBLISH_STEERING_MARKER:
-            self.marker_pub = self.create_publisher(Marker, '/viz/projected_line', 10)
+        if LINE_STEERING_MARKER:
+            self.line_marker_pub = self.create_publisher(Marker, '/viz/steering_line', 10)
+        if ARC_STEERING_MARKER:
+            self.arc_marker_pub = self.create_publisher(Marker, '/viz/steering_arc', 10)
+        if GOAL_POINT_MARKER:
+            self.goal_point_pub = self.create_publisher(Marker, '/viz/goal_point', 10)
         self.prev_speed = 0.0
         self.prev_steering_angle = 0.0
+        self.prev_point_depth = 0.0
+        self.prev_point_angle = 0.0
         self.scan = None
         self.v1 = np.zeros((1,))
         self.v2 = np.zeros((1,))
 
         Vehicle.setup(
             wheelbase=0.33,
-            radius=0.5,
+            radius=0.33,
             max_steering_angle = 0.4
         )
 
@@ -87,7 +96,7 @@ class PathFollow(Node):
         
         self.steering = Steering(
             # | arc | line |
-            method='arc'
+            method='line'
         )
         
         # Smoothing
@@ -166,32 +175,33 @@ class PathFollow(Node):
         
         pos_disps, neg_disps = self.planner.disparities(ranges)
 
-        pos_disps, neg_disps = self.planner.get_paths(ranges, virtual, pos_disps, neg_disps)
+        paths = self.planner.get_paths(ranges, virtual, pos_disps, neg_disps)
 
         self.v1[:] = ranges
 
         # choose should be based on pre-resolve ranges
-        goal_idx, sign = self.planner.choose(ranges, pos_disps, neg_disps)
+        path = self.planner.choose(ranges, paths)
 
-        if goal_idx is None:
+        if path is None:
             print('NO GOAL POINT')
             steering_angle = self.prev_steering_angle
             speed = self.prev_speed
         else:
-            goal_depth = ranges[goal_idx]
-
-            steering_angle = self.steering.get(goal_idx, sign, goal_depth)
+            steering_angle = self.steering.get(path)
 
             steering_angle = self.smooth.get(steering_angle, self.prev_speed)
 
-            speed = self.speed.get(steering_angle,  goal_depth + Vehicle.radius - Vehicle.turning_radius)
+            speed = self.speed.get(steering_angle,  path.depth + Vehicle.radius - Vehicle.turning_radius)
             self.prev_speed = speed
         
         pipeline_time = (perf_counter() - pipeline_start) * 1_000
         # =====================================================
 
-        self.prev_speed = speed
-        self.prev_steering_angle = steering_angle
+        if path:
+            self.prev_speed = speed
+            self.prev_steering_angle = steering_angle
+            self.prev_point_depth = path.depth
+            self.prev_point_angle = Scan.index_to_angle(path.index)
 
         drive_msg = AckermannDriveStamped()
         drive_msg.drive.steering_angle = self.prev_steering_angle
@@ -226,25 +236,85 @@ class PathFollow(Node):
             msg = Float32MultiArray()
             msg.data = self.v2.tolist()
             self.v2_pub.publish(msg)
-        if PUBLISH_STEERING_MARKER:
-            # Marker
-            L = 20.0
-            front_offset = 0.4
-            ang = self.prev_steering_angle
-            p0 = Point(x=front_offset, y=0.0, z=0.0)
-            p1 = Point(x=L*math.cos(ang) + front_offset, y=L*math.sin(ang), z=0.0)
+        if LINE_STEERING_MARKER:
+            L = self.prev_point_depth
+            theta = self.prev_steering_angle
+            p0 = Point(x=0.0, y=0.0, z=0.0)
+            p1 = Point(x=L*math.cos(theta), y=L*math.sin(theta), z=0.0)
             m = Marker()
             m.pose.orientation.w = 1.0
-            m.header.frame_id = '/ego_racecar/base_link'
+            m.header.frame_id = '/ego_racecar/laser'
             m.header.stamp = self.get_clock().now().to_msg()
-            m.ns = 'project_line'
+            m.ns = 'steering_line'
             m.id = 0
             m.type = Marker.LINE_STRIP
             m.action = Marker.ADD
             m.scale.x = 0.05
             m.color = ColorRGBA(r=0.0, g=1.0, b=1.0, a=1.0)
             m.points = [p0, p1]
-            self.marker_pub.publish(m)
+            self.line_marker_pub.publish(m)
+        if ARC_STEERING_MARKER:
+            goal_depth = self.prev_point_depth
+            delta = self.prev_steering_angle
+            L = Vehicle.wheelbase
+
+            if goal_depth <= 0.0:
+                return
+
+            # Handle straight case
+            if abs(delta) < 1e-6:
+                s = np.linspace(0.0, goal_depth, 30)
+                x = s
+                y = np.zeros_like(s)
+            else:
+                R = L / math.tan(delta)
+
+                # Arc length to goal
+                s = np.linspace(0.0, goal_depth, 30)
+
+                # Convert arc length to circle angle
+                phi = s / R
+
+                x = R * np.sin(phi)
+                y = R * (1 - np.cos(phi))
+
+            points = [Point(x=float(px), y=float(py), z=0.0)
+                    for px, py in zip(x, y)]
+
+            m = Marker()
+            m.header.frame_id = '/ego_racecar/laser'
+            m.header.stamp = self.get_clock().now().to_msg()
+            m.ns = 'steering_arc'
+            m.id = 0
+            m.type = Marker.LINE_STRIP
+            m.action = Marker.ADD
+            m.scale.x = 0.05
+            m.color = ColorRGBA(r=1.0, g=0.0, b=0.0, a=1.0)
+            m.pose.orientation.w = 1.0
+            m.points = points
+
+            self.arc_marker_pub.publish(m)
+        if GOAL_POINT_MARKER:
+            delta = self.prev_point_angle
+            depth = self.prev_point_depth
+            m = Marker()
+            m.header.frame_id = '/ego_racecar/laser'
+            m.header.stamp = self.get_clock().now().to_msg()
+            m.ns = 'goal_point'
+            m.id = 0
+            m.type = Marker.SPHERE
+            m.action = Marker.ADD
+            m.scale.x = 0.5
+            m.scale.y = 0.5
+            m.scale.z=0.1
+            m.color = ColorRGBA(r=0.0, g=1.0, b=0.0, a=1.0)
+            m.pose.orientation.w = 1.0
+            m.pose.position.x = depth*math.cos(delta)
+            m.pose.position.y = depth*math.sin(delta)
+            m.pose.position.z = 0.0
+            self.goal_point_pub.publish(m)
+
+                    
 
 class Vehicle:
 
@@ -327,6 +397,73 @@ class Scan:
     def span_to_angle(cls, span, depth):
         return 2 * math.asin(span / (2 * depth))
     
+class Path:
+    def __init__(self, index, depth, sign):
+        self.index = index
+        self.depth = depth
+        self.sign = sign
+        self.vdepth = 0.0
+        self.vindex = 0.0
+        self.radius = 0.0
+
+    def resolve_radius(self, ranges, max_radius):
+        disp = self.index
+        depth = self.depth
+        if self.sign > 0:
+            start = disp + 1
+            end = int
+            end = int(disp + 2 * Scan.span_to_angle(max_radius, depth) / Scan.angle_increment)
+            if start >= end or start < 0 or end >= len(ranges) or end < 0:
+                self.radius = 0.0
+                return False
+        if self.sign < 0:
+            end = disp - 1
+            start = int(disp - 2 * Scan.span_to_angle(max_radius, depth) / Scan.angle_increment)
+            if start >= end or start < 0 or end >= len(ranges) or end < 0:
+                self.radius = 0.0
+                return False
+        section = slice(start, end + 1)
+        section_ranges = ranges[section]
+        min_radius = np.min(np.sqrt(
+            ranges[disp]**2 + section_ranges**2 - 2 * ranges[disp] * section_ranges))
+        self.radius = min_radius
+        return True
+            
+    def resolve_virtual(self, ranges, virtual):
+        depth = self.depth
+        disp = self.index
+        # Walk gap until intersection
+        if self.sign > 0:
+            points = np.flatnonzero((ranges[disp+1:] <= depth) | (virtual[disp+1:] > depth))
+            if points.size:
+                left_intersect = points[0] + disp + 1
+                self.vindex = left_intersect
+            else:
+                return False
+            # Drop to intersection range
+            if virtual[left_intersect] > depth:
+                left_intersect -= 1
+                self.vdepth = virtual[left_intersect]
+            else:
+                self.vdepth = depth
+
+        if self.sign < 0:
+            # Walk gap until intersection
+            points = np.flatnonzero((ranges[:disp] <= depth) | (virtual[:disp] > depth))
+            if points.size:
+                right_intersect = points[-1]
+                self.vindex = right_intersect
+            else:
+                return False
+            # Drop to intersection range
+            if virtual[right_intersect] > depth:
+                right_intersect += 1
+                self.vdepth = virtual[right_intersect]
+            else:
+                self.vdepth = depth
+            
+        return True
+            
 class Planner:
 
     def __init__(self, disparity_threshold, extension, track_direction):
@@ -352,53 +489,7 @@ class Planner:
         col_mins = range_matrix.min(axis=0)
         return col_mins
     
-    def resolve_disparities(self, ranges, virtual, pos_disps, neg_disps):
-        for disp in pos_disps:
-            # Walk gap until intersection
-            disp_range = ranges[disp]
-            points = np.flatnonzero((ranges[disp+1:] <= disp_range) | (virtual[disp+1:] > disp_range))
-            if points.size:
-                left_intersect = points[0] + disp + 1
-            else:
-                continue
-            # Drop to intersection range
-            if virtual[left_intersect] > disp_range:
-                left_intersect -= 1
-                new_ext = virtual[left_intersect]
-            else:
-                new_ext = disp_range
-            # Backtrack until second intersection
-            points = np.flatnonzero((ranges[:disp] <= new_ext) | (virtual[:disp] > new_ext))
-            right_intersect = points[-1] if points.size else disp
-            if virtual[right_intersect] > new_ext:
-                right_intersect += 1
-            ranges_section = ranges[right_intersect: left_intersect + 1]
-            np.minimum(ranges_section, new_ext, out=ranges_section)
-
-        for disp in neg_disps:
-            # Walk gap until intersection
-            disp_range = ranges[disp]
-            points = np.flatnonzero((ranges[:disp] <= disp_range) | (virtual[:disp] > disp_range))
-            if points.size:
-                right_intersect = points[-1]
-            else:
-                continue
-            # Drop to intersection range
-            if virtual[right_intersect] > disp_range:
-                right_intersect += 1
-                new_ext = virtual[right_intersect]
-            else:
-                new_ext = disp_range
-            # Backtrack until second intersection
-            points = np.flatnonzero((ranges[disp+1:] <= new_ext) | (virtual[disp+1:] > new_ext))
-            left_intersect = points[0] + disp + 1 if points.size else disp
-            if virtual[left_intersect] > new_ext:
-                left_intersect -= 1
-            ranges_section = ranges[right_intersect: left_intersect + 1]
-            np.minimum(ranges_section, new_ext, out=ranges_section)
-
     def disparities(self, ranges):
-        global disparity_threshold
         diffs = np.diff(ranges)
         pos_disp = np.flatnonzero(diffs >= DISPARITY_THRESHOLD)
         neg_disp = np.flatnonzero(diffs <= -DISPARITY_THRESHOLD)
@@ -406,40 +497,20 @@ class Planner:
     
     def get_paths(self, ranges, virtual, pos_disps, neg_disps):
         # Satisfiability: 1. disp radius, 2. arc path, 3. minimum arc radius
-        # Filter by disp radius
-        valid_pos_disps = []
-        for disp in pos_disps:
-            start = disp + 1
-            end = int(disp + 2 * Scan.span_to_angle(self.extension, ranges[disp]) / Scan.angle_increment)
-            if start >= end or start < 0 or end >= len(ranges) or end < 0:
-                continue
-            section = slice(start, end + 1)
-            section_ranges = ranges[section]
-            min_radius = np.min(np.sqrt(
-                ranges[disp]**2 + section_ranges**2 - 2 * ranges[disp] * section_ranges))
-            if min_radius > 2 * self.extension:
-                valid_pos_disps.append(disp)
+        paths = ([Path(disp, ranges[disp], 1) for disp in pos_disps] +
+                 [Path(disp, ranges[disp], -1) for disp in neg_disps])
+        
+        for path in paths:
+            path.resolve_radius(ranges, self.extension * 3)
 
-        valid_neg_disps = []
-        for disp in neg_disps:
-            end = disp - 1
-            start = int(disp - 2 * Scan.span_to_angle(self.extension, ranges[disp]) / Scan.angle_increment)
-            if start >= end or start < 0 or end >= len(ranges) or end < 0:
-                continue
-            section = slice(start, end + 1)
-            section_ranges = ranges[section]
-            min_radius = np.min(np.sqrt(
-                ranges[disp]**2 + section_ranges**2 - 2 * ranges[disp] * section_ranges))
-            if min_radius > 2 * self.extension:
-                valid_neg_disps.append(disp)
-            
-        self.resolve_disparities(ranges, virtual, valid_pos_disps, valid_neg_disps)
-        # Might ignore previous filtering
-        pos_disps, neg_disps = self.disparities(ranges)
+        paths = [path for path in paths if path.radius > 2 * self.extension]
+        
+        for path in paths:
+            path.resolve_virtual(ranges, virtual)
 
-        return pos_disps, neg_disps
-
-    def choose(self, ranges, pos_disps, neg_disps):
+        return paths
+    
+    def choose(self, ranges, paths):
         # HARDCODED
         steps = (0, 90, 180, 360, 539)
         N = Scan.size
@@ -458,24 +529,24 @@ class Planner:
         sections.insert(1, (530, 550))
 
         for section in sections:
-            goal_idx, sign = self.check_gap(ranges, pos_disps, neg_disps, section)
-            if not goal_idx is None:
-                    return goal_idx, sign
+            path = self.check_paths(ranges, section, paths)
+            if not path is None:
+                    return path
         print('No path...')
-        return None, None
+        return None
 
-    def check_gap(self, ranges, pos_disps, neg_disps, section):
+    def check_paths(self, ranges, section, paths):
         lo, hi = section
-        disps = np.concatenate((neg_disps, pos_disps))
+        disps = [path.index for path in paths]
         mask = (disps >= lo) & (disps <= hi)
         if not np.any(mask):
-            return None, None
+            return None
+        # Disps in section
         valid_disps = disps[mask]
         valid_ranges = ranges[valid_disps]
         local_goal_idx = np.nanargmax(valid_ranges)
-        goal_idx = valid_disps[local_goal_idx]
-        sign = 1 if goal_idx in pos_disps else 0
-        return goal_idx, sign
+        path = paths[local_goal_idx]
+        return path
 
 class Steering:
 
@@ -487,16 +558,16 @@ class Steering:
         else:
             raise ValueError('Invalid steering method')
         
-    def get_arc_angle(self, disp, sign, depth):
-        theta = Scan.index_to_angle(disp)
+    def get_arc_angle(self, path):
+        theta = Scan.index_to_angle(path.vindex)
         y = math.sin(theta)
-        gamma = 2 * y / depth**2
+        gamma = 2 * y / path.vdepth**2
         delta = np.arctan(Vehicle.wheelbase * gamma)
         angle = np.clip(delta, -Vehicle.max_steering_angle, Vehicle.max_steering_angle)
         return angle
 
-    def get_line_angle(self, disp, sign, depth):
-        theta = Scan.index_to_angle(disp)
+    def get_line_angle(self, path):
+        theta = Scan.index_to_angle(path.index)
         angle = np.clip(theta, -Vehicle.max_steering_angle, Vehicle.max_steering_angle)
         return angle
 
@@ -686,3 +757,83 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
+
+
+# def resolve_disparities(self, ranges, virtual, pos_disps, neg_disps):
+#         for disp in pos_disps:
+#             # Walk gap until intersection
+#             disp_range = ranges[disp]
+#             points = np.flatnonzero((ranges[disp+1:] <= disp_range) | (virtual[disp+1:] > disp_range))
+#             if points.size:
+#                 left_intersect = points[0] + disp + 1
+#             else:
+#                 continue
+#             # Drop to intersection range
+#             if virtual[left_intersect] > disp_range:
+#                 left_intersect -= 1
+#                 new_ext = virtual[left_intersect]
+#             else:
+#                 new_ext = disp_range
+#             # Backtrack until second intersection
+#             points = np.flatnonzero((ranges[:disp] <= new_ext) | (virtual[:disp] > new_ext))
+#             right_intersect = points[-1] if points.size else disp
+#             if virtual[right_intersect] > new_ext:
+#                 right_intersect += 1
+#             ranges_section = ranges[right_intersect: left_intersect + 1]
+#             np.minimum(ranges_section, new_ext, out=ranges_section)
+
+#         for disp in neg_disps:
+#             # Walk gap until intersection
+#             disp_range = ranges[disp]
+#             points = np.flatnonzero((ranges[:disp] <= disp_range) | (virtual[:disp] > disp_range))
+#             if points.size:
+#                 right_intersect = points[-1]
+#             else:
+#                 continue
+#             # Drop to intersection range
+#             if virtual[right_intersect] > disp_range:
+#                 right_intersect += 1
+#                 new_ext = virtual[right_intersect]
+#             else:
+#                 new_ext = disp_range
+#             # Backtrack until second intersection
+#             points = np.flatnonzero((ranges[disp+1:] <= new_ext) | (virtual[disp+1:] > new_ext))
+#             left_intersect = points[0] + disp + 1 if points.size else disp
+#             if virtual[left_intersect] > new_ext:
+#                 left_intersect -= 1
+#             ranges_section = ranges[right_intersect: left_intersect + 1]
+#             np.minimum(ranges_section, new_ext, out=ranges_section)
+
+
+
+# valid_pos_disps = []
+#         for disp in pos_disps:
+#             start = disp + 1
+#             end = int(disp + 2 * Scan.span_to_angle(self.extension, ranges[disp]) / Scan.angle_increment)
+#             if start >= end or start < 0 or end >= len(ranges) or end < 0:
+#                 continue
+#             section = slice(start, end + 1)
+#             section_ranges = ranges[section]
+#             min_radius = np.min(np.sqrt(
+#                 ranges[disp]**2 + section_ranges**2 - 2 * ranges[disp] * section_ranges))
+#             if min_radius > 2 * self.extension:
+#                 valid_pos_disps.append(disp)
+
+#         valid_neg_disps = []
+#         for disp in neg_disps:
+#             end = disp - 1
+#             start = int(disp - 2 * Scan.span_to_angle(self.extension, ranges[disp]) / Scan.angle_increment)
+#             if start >= end or start < 0 or end >= len(ranges) or end < 0:
+#                 continue
+#             section = slice(start, end + 1)
+#             section_ranges = ranges[section]
+#             min_radius = np.min(np.sqrt(
+#                 ranges[disp]**2 + section_ranges**2 - 2 * ranges[disp] * section_ranges))
+#             if min_radius > 2 * self.extension:
+#                 valid_neg_disps.append(disp)
+            
+#         self.resolve_disparities(ranges, virtual, valid_pos_disps, valid_neg_disps)
+#         # Might ignore previous filtering
+#         pos_disps, neg_disps = self.disparities(ranges)
+
+#         return pos_disps, neg_disps
