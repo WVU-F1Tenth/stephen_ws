@@ -124,7 +124,7 @@ class PurePursuit(Node):
         point.x = self.waypoints_x[self.goal_index]
         point.y = self.waypoints_y[self.goal_index]
         point.z = 0.0
-        goal_marker.points.append(point)
+        goal_marker.points.append(point) # type: ignore
         goal_marker.header.frame_id = "map"
         goal_marker.id = 1
         goal_marker.type = Marker.POINTS
@@ -171,12 +171,12 @@ class PurePursuit(Node):
             p2 = self.tf_buffer.transform(
                 p1,
                 to_frame,
-                timeout=Duration(seconds=0.05),
+                timeout=Duration(seconds=0.05), # type: ignore
             )
             return p2.point.x, p2.point.y
-        except tf2_ros.TransformException as e:
+        except tf2_ros.TransformException as e: # type: ignore
             self.get_logger().warn(f"TF unavailable: {e}")
-            return None, None
+            return None, None # type: ignore
 
 def main(args=None):
     rclpy.init(args=args)
