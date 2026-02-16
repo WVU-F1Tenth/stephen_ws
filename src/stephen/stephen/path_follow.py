@@ -749,47 +749,47 @@ def main(args=None):
 if __name__ == '__main__':
     main()
 
-# def resolve_disparities(self, ranges, virtual, pos_disps, neg_disps):
-#         for disp in pos_disps:
-#             # Walk gap until intersection
-#             disp_range = ranges[disp]
-#             points = np.flatnonzero((ranges[disp+1:] <= disp_range) | (virtual[disp+1:] > disp_range))
-#             if points.size:
-#                 left_intersect = points[0] + disp + 1
-#             else:
-#                 continue
-#             # Drop to intersection range
-#             if virtual[left_intersect] > disp_range:
-#                 left_intersect -= 1
-#                 new_ext = virtual[left_intersect]
-#             else:
-#                 new_ext = disp_range
-#             # Backtrack until second intersection
-#             points = np.flatnonzero((ranges[:disp] <= new_ext) | (virtual[:disp] > new_ext))
-#             right_intersect = points[-1] if points.size else disp
-#             if virtual[right_intersect] > new_ext:
-#                 right_intersect += 1
-#             ranges_section = ranges[right_intersect: left_intersect + 1]
-#             np.minimum(ranges_section, new_ext, out=ranges_section)
+def modify_ranges_for_disparities(ranges, virtual, pos_disps, neg_disps):
+        for disp in pos_disps:
+            # Walk gap until intersection
+            disp_range = ranges[disp]
+            points = np.flatnonzero((ranges[disp+1:] <= disp_range) | (virtual[disp+1:] > disp_range))
+            if points.size:
+                left_intersect = points[0] + disp + 1
+            else:
+                continue
+            # Drop to intersection range
+            if virtual[left_intersect] > disp_range:
+                left_intersect -= 1
+                new_ext = virtual[left_intersect]
+            else:
+                new_ext = disp_range
+            # Backtrack until second intersection
+            points = np.flatnonzero((ranges[:disp] <= new_ext) | (virtual[:disp] > new_ext))
+            right_intersect = points[-1] if points.size else disp
+            if virtual[right_intersect] > new_ext:
+                right_intersect += 1
+            ranges_section = ranges[right_intersect: left_intersect + 1]
+            np.minimum(ranges_section, new_ext, out=ranges_section)
 
-#         for disp in neg_disps:
-#             # Walk gap until intersection
-#             disp_range = ranges[disp]
-#             points = np.flatnonzero((ranges[:disp] <= disp_range) | (virtual[:disp] > disp_range))
-#             if points.size:
-#                 right_intersect = points[-1]
-#             else:
-#                 continue
-#             # Drop to intersection range
-#             if virtual[right_intersect] > disp_range:
-#                 right_intersect += 1
-#                 new_ext = virtual[right_intersect]
-#             else:
-#                 new_ext = disp_range
-#             # Backtrack until second intersection
-#             points = np.flatnonzero((ranges[disp+1:] <= new_ext) | (virtual[disp+1:] > new_ext))
-#             left_intersect = points[0] + disp + 1 if points.size else disp
-#             if virtual[left_intersect] > new_ext:
-#                 left_intersect -= 1
-#             ranges_section = ranges[right_intersect: left_intersect + 1]
-#             np.minimum(ranges_section, new_ext, out=ranges_section)
+        for disp in neg_disps:
+            # Walk gap until intersection
+            disp_range = ranges[disp]
+            points = np.flatnonzero((ranges[:disp] <= disp_range) | (virtual[:disp] > disp_range))
+            if points.size:
+                right_intersect = points[-1]
+            else:
+                continue
+            # Drop to intersection range
+            if virtual[right_intersect] > disp_range:
+                right_intersect += 1
+                new_ext = virtual[right_intersect]
+            else:
+                new_ext = disp_range
+            # Backtrack until second intersection
+            points = np.flatnonzero((ranges[disp+1:] <= new_ext) | (virtual[disp+1:] > new_ext))
+            left_intersect = points[0] + disp + 1 if points.size else disp
+            if virtual[left_intersect] > new_ext:
+                left_intersect -= 1
+            ranges_section = ranges[right_intersect: left_intersect + 1]
+            np.minimum(ranges_section, new_ext, out=ranges_section)
