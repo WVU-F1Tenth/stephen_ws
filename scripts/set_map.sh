@@ -33,7 +33,7 @@ sed -i \
 "$HOME/.bashrc"
 
 # Edit yaml file to accomodate _map naming
-sed -Ei "s#(^[[:space:]]*)image:.*(\.png|\.pgm)#\1image: '${1}_map\2'#" \
+sed -Ei "s#(^[[:space:]]*)image:.*(\.png|\.pgm)'?#\1image: '${1}_map\2'#" \
     "${MAP_PATH}_map.yaml"
 
 # Edit sim_ws yaml
