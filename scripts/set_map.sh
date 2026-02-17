@@ -14,10 +14,27 @@ fi
 
 MAP_PATH="$HOME/stephen_ws/src/stephen/data/maps/$1/$1"
 
+if [[ ! -f "${MAP_PATH}_map.png" && ! -f "${MAP_PATH}_map.pgm" ]]; then
+    echo "ERROR: No png or pgm file"
+    echo "Must have form <name>_map.png or <name>_map.pgm"
+    return 1
+fi
+
+if [[ ! -f "${MAP_PATH}_map.yaml" ]]; then
+    echo "ERROR: No yaml file"
+    echo "Must have form <name>_map.yaml"
+    return 1
+fi
+
+# Write MAP_PATH export to .bashrc
 sed -i \
 -e "/^export MAP_PATH=.*/d" \
 -e "\$a export MAP_PATH=\"$MAP_PATH\"" \
 "$HOME/.bashrc"
+
+# Edit yaml file to accomodate _map naming
+sed -Ei "s#(^[[:space:]]*)image:.*(\.png|\.pgm)#\1image: '${1}_map\2'#" \
+    "${MAP_PATH}_map.yaml"
 
 # Edit sim_ws yaml
 sed -Ei "s|(^[[:space:]]*)map_path:.*|\1map_path: '${MAP_PATH}_map'|" \

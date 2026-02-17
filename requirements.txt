@@ -2,6 +2,6 @@ numpy==1.24.4
 numba==0.57.1
 pandas
 simple_pid
-colcon-build-extensions
+colcon-common-extensions
 vispy
 glfw
