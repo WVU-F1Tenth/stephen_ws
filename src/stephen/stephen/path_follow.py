@@ -35,8 +35,9 @@ HERTZ = 40.0
 VISUALS = True
 LINE_STEERING_MARKER = True
 ARC_STEERING_MARKER = False
-PUBLISH_POINTS1 = True
-PUBLISH_POINTS2 = True
+PUBLISH_POINTS1 = False
+PUBLISH_POINTS2 = False
+PUBLISH_POINTS3 = False
 PUBLISH_V1 = True
 PUBLISH_V2 = True
 VISUAL_HERTZ = 5.0
@@ -79,6 +80,8 @@ class PathFollow(Node):
             self.points1_pub = self.create_publisher(Marker, '/viz/points1', 10)
         if PUBLISH_POINTS2:
             self.points2_pub = self.create_publisher(Marker, '/viz/points2', 10)
+        if PUBLISH_POINTS3:
+            self.points3_pub = self.create_publisher(Marker, '/viz/points3', 10)
         self.steering_angle = 0.0
         self.speed = 0.0
         self.path = None
@@ -177,7 +180,7 @@ class PathFollow(Node):
 
         virtual = self.planner.get_virtual(ranges)
 
-        self.v2[:] = virtual
+        self.v1[:] = virtual
         
         pos_disps, neg_disps = self.planner.disparities(ranges)
 
@@ -200,19 +203,14 @@ class PathFollow(Node):
         # =====================================================
 
         # DEBUG
-        # if path:
-        #     print(f'{path.index = }')
-        #     print(f'{self.planner.section = }')
-        #     paths_indicies = [path.index for path in self.paths]
-        #     paths_depths = [path.depth for path in self.paths]
-        #     print(f'{paths_indicies = }')
-        #     print(f'{paths_depths}')
-
+        # print(Scan.span_to_angle(1.0, 20.0)/Scan.angle_increment)
+        
         if path:
             self.path = path
             self.speed = speed
             self.steering_angle = steering_angle
-
+            self.virtual = virtual
+       
         drive_msg = AckermannDriveStamped()
         drive_msg.drive.steering_angle = steering_angle
         drive_msg.drive.speed = speed
@@ -247,7 +245,7 @@ class PathFollow(Node):
             msg.data = self.v2.tolist()
             self.v2_pub.publish(msg)
         if LINE_STEERING_MARKER and self.path:
-            L = self.path.depth
+            L = self.path.vdepth
             theta = self.steering_angle
             p0 = Point(x=0.0, y=0.0, z=0.0)
             p1 = Point(x=L*math.cos(theta), y=L*math.sin(theta), z=0.0)
@@ -320,7 +318,7 @@ class PathFollow(Node):
             m.header.frame_id = '/ego_racecar/laser'
             m.header.stamp = self.get_clock().now().to_msg()
             m.ns = 'points2'
-            m.id = 1
+            m.id = 0
             m.type = Marker.POINTS
             m.action = Marker.ADD
             m.scale.x = 0.2
@@ -328,6 +326,22 @@ class PathFollow(Node):
             m.color = ColorRGBA(r=0.0, g=1.0, b=0.0, a=1.0)
             m.points = points2
             self.points2_pub.publish(m)
+        if PUBLISH_POINTS3 and not self.planner.vdisps is None:
+            points3 = [Point(x=self.virtual[disp]*math.cos(Scan.index_to_angle(disp)),
+                            y=self.virtual[disp]*math.sin(Scan.index_to_angle(disp)),
+                            z=0.0) for disp in self.planner.vdisps]
+            m = Marker()
+            m.header.frame_id = '/ego_racecar/laser'
+            m.header.stamp = self.get_clock().now().to_msg()
+            m.ns = 'points3'
+            m.id = 0
+            m.type = Marker.POINTS
+            m.action = Marker.ADD
+            m.scale.x = 0.2
+            m.scale.y = 0.2
+            m.color = ColorRGBA(r=0.0, g=0.0, b=1.0, a=0.5)
+            m.points = points3
+            self.points3_pub.publish(m)
 
 class Vehicle:
 
@@ -471,11 +485,14 @@ class Planner:
         pdisps, ndisps = self.disparities(virtual)
         vdisps = np.sort(np.concatenate((pdisps, ndisps)))
         for path in paths:
-            diffs = np.abs(vdisps - path.index)
-            idx = vdisps[np.argmin(diffs)]
-            path.vindex = idx
-            path.vdepth = virtual[idx]
-            path.vangle = Scan.index_to_angle(idx)
+            diff = np.abs(vdisps - path.index)
+            nearest = vdisps[np.argmin(diff)]
+            neighborhood = vdisps[np.abs(vdisps - nearest) <= 10]
+            goal = neighborhood[np.argmax(virtual[neighborhood])]
+            path.vindex = goal
+            path.vdepth = virtual[goal]
+            path.vangle = Scan.index_to_angle(goal)
+            self.vdisps = vdisps
 
     def resolve_radii(self, ranges, paths, min_radius):
         pass
