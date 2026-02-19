@@ -3,7 +3,7 @@
 import rclpy
 from rclpy.node import Node
 from ackermann_msgs.msg import AckermannDriveStamped
-from geometry_msgs.msg import Point, PointStamped
+from geometry_msgs.msg import Point, PointStamped, TransformStamped, Quaternion
 from nav_msgs.msg import Odometry
 from visualization_msgs.msg import Marker
 import numpy as np
@@ -28,8 +28,13 @@ if not CSV_PATH.exists():
 
 LOOKAHEAD_DISTANCE = 1.20
 WHEELBASE = 0.3
-MAX_STEER = 0.42
+MAX_STEER = 0.38
 VIS_RATE = 5.0
+
+K_ERROR = 1.0 # Cross-track error gain - main error
+K_HEADING = 1.0 # Heading gain - helps smooth higher speeds
+K_SOFTENING = 1.0 # Softening contant - helps smooth low speeds
+K_DAMPING = 1.0 # Alternative to heading gain - helps smooth high speeds
 
 class PurePursuit(Node):
     def __init__(self):
@@ -73,49 +78,77 @@ class PurePursuit(Node):
         self.x_odom = 0.0
         self.y_odom = 0.0
         self.heading_odom = 0.0
+        self.speed = 0.0
 
         df = pd.read_csv(CSV_PATH, header=None, comment='#', sep=',')
         self.waypoints_x = df.iloc[:, 0].to_numpy(dtype=float)
         self.waypoints_y = df.iloc[:, 1].to_numpy(dtype=float)
-        self.waypoints_heading = None
+        self.headings = df.iloc[:, 2].tonumpy(dtype=float)
         self.path_marker.points = [Point(x=float(x), y=float(y), z=0.0)
                               for x, y in zip(self.waypoints_x, self.waypoints_y)]
+        
+    def quaternion_to_heading(self, q):
+        siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
+        cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+        return np.arctan2(siny_cosp, cosy_cosp)
+    
+    def heading_to_quaternion(self, yaw):
+        q = Quaternion()
+        q.x = 0.0
+        q.y = 0.0
+        q.z = math.sin(yaw / 2.0)
+        q.w = math.cos(yaw / 2.0)
+        return q
 
     def pose_callback(self, odometry_info):
-        self.x_odom = odometry_info.pose.pose.position.x
-        self.y_odom = odometry_info.pose.pose.position.y
-        siny_cosp = 2.0 * (odometry_info.pose.pose.orientation.w * odometry_info.pose.pose.orientation.z + 
-                           odometry_info.pose.pose.orientation.x * odometry_info.pose.pose.orientation.y)
-        cosy_cosp = 1.0 - 2.0 * (odometry_info.pose.pose.orientation.y * odometry_info.pose.pose.orientation.y + 
-                                 odometry_info.pose.pose.orientation.z * odometry_info.pose.pose.orientation.z)
-        self.heading_odom = np.arctan2(siny_cosp, cosy_cosp)
+        self.x_car_odom = odometry_info.pose.pose.position.x
+        self.y_car_odom = odometry_info.pose.pose.position.y
+        self.heading_car_odom = self.quaternion_to_heading(odometry_info.pose.pose.orientation)
         
+        self.speed = self.get_speed()
+
         # Get goal point
-        x_map, y_map = self.x_odom, self.y_odom
-        dx = x_map - self.waypoints_x
-        dy = y_map - self.waypoints_y
-        d = np.hypot(dx, dy)
-        start_index = np.argmin(d)
-        for i in range(d.size):
-            if d[(start_index + i) % d.size] > LOOKAHEAD_DISTANCE:
+        x_car_map, y_car_map = self.x_car_odom, self.y_car_odom
+        dx = x_car_map - self.waypoints_x
+        dy = y_car_map - self.waypoints_y
+        distances = np.hypot(dx, dy)
+        start_index = np.argmin(distances)
+        for i in range(distances.size):
+            if distances[(start_index + i) % distances.size] > LOOKAHEAD_DISTANCE:
                 break
-        if i == d.size - 1:
+        if i == distances.size - 1:
             raise RuntimeError('Exhausted waypoints')
-        self.goal_index = (start_index + i) % d.size
+        self.goal_index = (start_index + i) % distances.size
 
         # Transform goal point to vehicle frame of reference
-        x_goal_base_link, y_goal_base_link = self.tfxy(
-            'map', 'ego_racecar/base_link', self.waypoints_x[self.goal_index], self.waypoints_y[self.goal_index])
-        if x_goal_base_link is None:
+        result = self.transform(
+            'map',
+            'ego_racecar/laser',
+            self.waypoints_x[self.goal_index],
+            self.waypoints_y[self.goal_index],
+            self.headings[self.goal_index]
+            )
+        if result is None:
             return
+        x_goal_laser, y_goal_laser, heading_goal_laser = result
+        
+        # Transform to front axle
+        goal_heading = self.headings[self.goal_index]
+        error = d[self.goal_index]
 
-        # Calculate curvature/steering angle
-        L = np.hypot(x_goal_base_link, y_goal_base_link)
-        gamma = 2*y_goal_base_link/L**2
-        delta = np.arctan(WHEELBASE*gamma)
+        feedforward_term = math.atan(WHEELBASE * goal_heading)
+
+        heading_term = K_HEADING * (self.heading_odom - goal_heading)
+
+        cross_track_term = math.atan((K_ERROR * error)/(K_SOFTENING + self.speed))
+
+        # yaw_damping = -K_DAMPING * YAW_RATE
+        
+        delta = feedforward_term + heading_term + cross_track_term # + yaw_damping
+
         self.angle = np.clip(delta, -MAX_STEER, MAX_STEER)
 
-        self.reactive_control()
+        self.publish_drive()
         
     def publish_markers(self):
         # Visualization marker for current goal point
@@ -148,35 +181,41 @@ class PurePursuit(Node):
             self.path_published = True
         self.pub_dynamic_viz.publish(goal_marker)
 
-    def reactive_control(self):
+    def get_speed(self):
+        if abs(self.angle) > np.radians(20.0):
+            return 2.0
+        elif abs(self.angle) > np.radians(10.0):
+            return 4.0
+        else:
+            return 6.0
+
+    def publish_drive(self):
         ackermann_drive_result = AckermannDriveStamped()
         ackermann_drive_result.header.stamp = self.get_clock().now().to_msg()
         ackermann_drive_result.drive.steering_angle = self.angle
-        if abs(self.angle) > np.radians(20.0):
-            ackermann_drive_result.drive.speed = 2.0
-        elif abs(self.angle) > np.radians(10.0):
-            ackermann_drive_result.drive.speed = 4.0
-        else:
-            ackermann_drive_result.drive.speed = 6.0
+        ackermann_drive_result.drive.speed = self.speed
         self.pub_drive.publish(ackermann_drive_result)
 
-    def tfxy(self, from_frame, to_frame, x_from: float, y_from: float) -> Tuple[float, float]:
+    def transform(self, from_frame, to_frame, x_from, y_from, yaw):
         try:
-            p1 = PointStamped()
-            p1.header.frame_id = from_frame
-            p1.header.stamp = Time().to_msg()
-            p1.point.x = float(x_from)
-            p1.point.y = float(y_from)
-            p1.point.z = 0.0
-            p2 = self.tf_buffer.transform(
-                p1,
+            t1 = TransformStamped()
+            t1.header.frame_id = from_frame
+            t1.header.stamp = Time().to_msg()
+            t1.transform.translation.x = float(x_from)
+            t1.transform.translation.y = float(y_from)
+            t1.transform.translation.z = 0.0
+            quat = self.heading_to_quaternion(yaw)
+            t1.transform.rotation.z = quat.z
+            t1.transform.rotation.w = quat.w
+            t2 = self.tf_buffer.transform(
+                t1,
                 to_frame,
                 timeout=Duration(seconds=0.05), # type: ignore
             )
-            return p2.point.x, p2.point.y
-        except tf2_ros.TransformException as e:  # type: ignore
+            return 
+        except tf2_ros.TransformException as e: # type: ignore
             self.get_logger().warn(f"TF unavailable: {e}")
-            return None, None # type: ignore
+            return None
 
 def main(args=None):
     rclpy.init(args=args)

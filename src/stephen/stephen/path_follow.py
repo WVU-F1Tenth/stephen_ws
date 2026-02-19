@@ -20,16 +20,20 @@ from simple_pid import PID
 import threading
 
 # TODO:
+# - Make markers for virtual on car
+# - Check algorithm on smoothed map
+# - Implement path radius filter
+# - Combine with global planning
+# - Implment arc steering and arc marker
 # - Range limit could be adaptive based on amount of path taken up or geometric distance
 # - More effiction wall extension (try cupy or only 720 indexes)
-# - Condsider multiple disparities in almost line
 # - Handle potential bottle neck disparity overlap
+#       Base extension must be set to car radius or this could be a problem
 # - Tune choose path
 # - Smoothing function sometimes gets stuck at offset
 # - Create angle planning to account for little information know about front
+#       Could use difference between depth and vdepth
 # - Create tracking line for sim to compare paths
-# - Virtual resolve doesn't work
-# - path radius doesn't work
 
 HERTZ = 40.0
 VISUALS = True

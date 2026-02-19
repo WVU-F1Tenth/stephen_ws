@@ -25,7 +25,8 @@ setup(
             'scan_visual=stephen.scan_visual:main',
             'path_follow=stephen.path_follow:main',
             'test=stephen.testing:main',
-            'pure_pursuit=stephen.pure_pursuit:main'
+            'pure_pursuit=stephen.pure_pursuit:main',
+            'stanley=stephen.stanley:main',
         ],
     },
 )
