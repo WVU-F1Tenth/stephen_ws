@@ -13,8 +13,7 @@ __pycache__/
 src/.vscode
 
 # Output files
-gap_follow_info.txt
-path_follow_info.txt
+*_info.txt
 
 # Other
 wheelhouse/

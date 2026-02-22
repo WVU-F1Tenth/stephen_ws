@@ -12,12 +12,13 @@ from math import pi
 from visualization_msgs.msg import Marker
 from geometry_msgs.msg import Point
 from std_msgs.msg import ColorRGBA
-import signal
 import sys
 from collections import defaultdict
 from types import SimpleNamespace
 from simple_pid import PID
-import threading
+import select
+import termios
+import tty
 
 # TODO:
 # - Make markers for virtual on car
@@ -63,8 +64,8 @@ class PathFollow(Node):
     
     def __init__(self):
         super().__init__('gap_follow')
-        signal.signal(signal.SIGINT, handler)
         self.drive_pub = self.create_publisher(AckermannDriveStamped, '/drive', 10)
+        print(f'TTY: {sys.stdin.isatty()}')
         if HERTZ == 0.0:
             self.laser_scan_sub = self.create_subscription(LaserScan, '/scan', self.adjust, 10)
         else:
@@ -86,6 +87,7 @@ class PathFollow(Node):
             self.points2_pub = self.create_publisher(Marker, '/viz/points2', 10)
         if PUBLISH_POINTS3:
             self.points3_pub = self.create_publisher(Marker, '/viz/points3', 10)
+        self.keyboard_timer = self.create_timer(.2, self.check_input)
         self.steering_angle = 0.0
         self.speed = 0.0
         self.path = None
@@ -94,6 +96,11 @@ class PathFollow(Node):
         self.v2 = np.zeros((1,))
         self.paths = []
         self.section = None
+
+        print('Command (x=stop, s=-speed, d=+speed, j=-exp, k=+exp, h-=threshold, l+=threshold)')
+        self.fd = sys.stdin.fileno()
+        self.old_settings = termios.tcgetattr(self.fd)
+        tty.setcbreak(self.fd)
 
         Vehicle.setup(
             wheelbase=0.33,
@@ -346,6 +353,44 @@ class PathFollow(Node):
             m.color = ColorRGBA(r=0.0, g=0.0, b=1.0, a=0.5)
             m.points = points3
             self.points3_pub.publish(m)
+
+    def check_input(self):
+        global FLAT_SPEED, SMOOTHING_EXP, DISPARITY_THRESHOLD
+        key = self.get_key()
+        if key:
+            if key == 's':
+                FLAT_SPEED -= .1
+                print(f'speed = {FLAT_SPEED:.2}')
+            elif key == 'd':
+                FLAT_SPEED += .1
+                print(f'speed = {FLAT_SPEED:.2}')
+            elif key == 'S':
+                FLAT_SPEED -= 1.0
+                print(f'speed = {FLAT_SPEED:.2}')
+            elif key == 'D':
+                FLAT_SPEED += 1.0
+                print(f'speed = {FLAT_SPEED:.2}')
+            elif key == 'j':
+                SMOOTHING_EXP -= .1
+                print(f'smoothing exp = {SMOOTHING_EXP:.2}')
+            elif key == 'k':
+                SMOOTHING_EXP += .1
+                print(f'smoothin exp = {SMOOTHING_EXP:.2}')
+            elif key == 'h':
+                DISPARITY_THRESHOLD -= .1
+                print(f'disparity threshold = {DISPARITY_THRESHOLD:.2}')
+            elif key == 'l':
+                DISPARITY_THRESHOLD += .1
+                print(f'disparity threshold = {DISPARITY_THRESHOLD:.2}')
+            elif key == 'x':
+                print('stopped')
+                FLAT_SPEED = 0.0
+
+    def get_key(self):
+        rlist, _, _ = select.select([sys.stdin], [], [], 0.01)
+        if rlist:
+            return sys.stdin.read(1)
+        return None
 
 class Vehicle:
 
@@ -714,41 +759,8 @@ class SpeedController:
         speed = min(v_tot, v_lat, self.max_speed)
         self.last_speed = speed
         return speed
-    
-def input_thread():
-    global FLAT_SPEED, SMOOTHING_EXP, DISPARITY_THRESHOLD
-    print('Command (x=stop, s=-speed, d=+speed, j=-exp, k=+exp, h-=threshold, l+=threshold)')
-    while True:
-        cmd = input()
-        if cmd == 's':
-            FLAT_SPEED -= .1
-            print(f'speed = {FLAT_SPEED:.2}')
-        elif cmd == 'd':
-            FLAT_SPEED += .1
-            print(f'speed = {FLAT_SPEED:.2}')
-        elif cmd == 'S':
-            FLAT_SPEED -= 1.0
-            print(f'speed = {FLAT_SPEED:.2}')
-        elif cmd == 'D':
-            FLAT_SPEED += 1.0
-            print(f'speed = {FLAT_SPEED:.2}')
-        elif cmd == 'j':
-            SMOOTHING_EXP -= .1
-            print(f'smoothing exp = {SMOOTHING_EXP:.2}')
-        elif cmd == 'k':
-            SMOOTHING_EXP += .1
-            print(f'smoothin exp = {SMOOTHING_EXP:.2}')
-        elif cmd == 'h':
-            DISPARITY_THRESHOLD -= .1
-            print(f'disparity threshold = {DISPARITY_THRESHOLD:.2}')
-        elif cmd == 'l':
-            DISPARITY_THRESHOLD += .1
-            print(f'disparity threshold = {DISPARITY_THRESHOLD:.2}')
-        elif cmd == 'x':
-            print('stopped')
-            FLAT_SPEED = 0.0
                        
-def handler(sig, frame):
+def create_file():
     if FILE_OUTPUT:
         for key, value in file_info.mean_times.items():
             mean_time = value[0] / value[1]
@@ -758,14 +770,18 @@ def handler(sig, frame):
                 f.write(f'\n{key.upper()}\n')
                 for subkey, value in subdict.items():
                     f.write(f'{subkey} : {value}\n')
-    sys.exit(0)
 
 def main(args=None):
-    threading.Thread(target=input_thread, daemon=True).start()
     rclpy.init(args=args)
     node = PathFollow()
-    rclpy.spin(node)
-    rclpy.shutdown()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        create_file()
+    finally:
+        termios.tcsetattr(node.fd, termios.TCSADRAIN, node.old_settings)
+        node.destroy_node()
+        rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

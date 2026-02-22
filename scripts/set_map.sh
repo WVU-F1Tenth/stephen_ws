@@ -27,6 +27,7 @@ if [[ ! -f "${MAP_PATH}_map.yaml" ]]; then
 fi
 
 # Write MAP_PATH export to .bashrc
+echo "Writing to $HOME/.bashrc"
 sed -i \
 -e "/^export MAP_PATH=.*/d" \
 -e "\$a export MAP_PATH=\"$MAP_PATH\"" \
