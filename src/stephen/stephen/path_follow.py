@@ -99,7 +99,7 @@ class PathFollow(Node):
 
         print('Command (x=stop, s=-speed, d=+speed, j=-exp, k=+exp, h-=threshold, l+=threshold)')
         self.fd = sys.stdin.fileno()
-        self.old_settings = termios.tcgetattr(self.fd)
+        self.terminal_settings = termios.tcgetattr(self.fd)
         tty.setcbreak(self.fd)
 
         Vehicle.setup(
@@ -779,7 +779,7 @@ def main(args=None):
     except KeyboardInterrupt:
         create_file()
     finally:
-        termios.tcsetattr(node.fd, termios.TCSADRAIN, node.old_settings)
+        termios.tcsetattr(node.fd, termios.TCSADRAIN, node.terminal_settings)
         node.destroy_node()
         rclpy.shutdown()
 

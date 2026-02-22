@@ -16,6 +16,11 @@ import tf2_geometry_msgs
 import math
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 import os
+import select
+import termios
+import sys
+import tty
+from types import SimpleNamespace
 
 map_path = os.environ.get('MAP_PATH')
 if map_path is None:
@@ -27,14 +32,17 @@ if not CSV_PATH.exists():
 SIMULATOR = True
 
 LOOKAHEAD = 1.20
-WHEELBASE = 0.3
+WHEELBASE = 0.33
 MAX_STEER = 0.38
 VIS_RATE = 5.0
 
-K_ERROR = 1.0 # Cross-track error gain - main error
-K_HEADING = 0.5 # Heading gain - helps smooth higher speeds
-K_SOFTENING = 1.0 # Softening contant - helps smooth low speeds
-K_DAMPING = 1.0 # Alternative to heading gain - helps smooth high speeds
+params = SimpleNamespace(
+    speed=SimpleNamespace(v=0.0, keys=('s', 'd')),
+    k_error=SimpleNamespace(v=1.5, keys=('j', 'k')), # Cross-track error gain - main error
+    k_heading=SimpleNamespace(v=0.0, keys=('h', 'l')), # Heading gain - helps smooth higher speeds
+    k_softening=SimpleNamespace(v=1.0, keys=None), # Softening contant - helps smooth low speeds
+    k_damping=SimpleNamespace(v=0.0, keys=None), # Alternative to heading gain - helps smooth high speeds
+)
 
 class Stanley(Node):
     def __init__(self):
@@ -52,6 +60,7 @@ class Stanley(Node):
         self.vis_timer = self.create_timer(1.0 / VIS_RATE, self.publish_markers)
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+        self.keyboard_timer = self.create_timer(.2, self.check_input)
 
         # Reading CSV data
         self.path_marker = Marker()
@@ -76,10 +85,6 @@ class Stanley(Node):
 
         self.angle = 0.0
         self.speed = 0.0
-
-        self.x_car_odom = 0.0
-        self.y_car_odom = 0.0
-        self.heading_car_odom = 0.0
         self.goal_index = 0
         
         df = pd.read_csv(CSV_PATH, header=None, comment='#', sep=',')
@@ -88,59 +93,63 @@ class Stanley(Node):
         self.waypoints_heading = df.iloc[:, 2].to_numpy(dtype=float)
         self.path_marker.points = [Point(x=float(x), y=float(y), z=0.0)
                               for x, y in zip(self.waypoints_x, self.waypoints_y)]
+        
+        print('Command (space=stop, sd=speed, jk=k_error, hl=k_heading)')
+        self.fd = sys.stdin.fileno()
+        self.terminal_settings = termios.tcgetattr(self.fd)
+        tty.setcbreak(self.fd)
 
     def pose_callback(self, odometry_info):
-        self.x_car_odom = odometry_info.pose.pose.position.x
-        self.y_car_odom = odometry_info.pose.pose.position.y
-        self.heading_car_odom = self.quaternion_to_heading(odometry_info.pose.pose.orientation)
+        x_car_odom = odometry_info.pose.pose.position.x
+        y_car_odom = odometry_info.pose.pose.position.y
+        heading_car_odom = self.quaternion_to_heading(odometry_info.pose.pose.orientation)
 
         if SIMULATOR:
-            x_car_map, y_car_map = self.x_car_odom, self.y_car_odom
-            heading_car_map = self.heading_car_odom
+            x_car_map, y_car_map = x_car_odom, y_car_odom
+            heading_car_map = heading_car_odom
         else:
-            map_car_point = self.transform(
+            point_car_map = self.transform(
                 'odom',
                 'map',
-                self.x_car_odom,
-                self.y_car_odom,
-                self.heading_car_odom
+                x_car_odom,
+                y_car_odom,
+                heading_car_odom
                 )
-            if map_car_point is None:
+            if point_car_map is None:
                 return
-            x_car_map, y_car_map, heading_car_map = map_car_point # type: ignore
+            x_car_map, y_car_map, heading_car_map = point_car_map # type: ignore
+
+        # ===================================================================================
 
         # Project to front axle
         x_car_map = x_car_map + WHEELBASE * math.cos(heading_car_map)
         y_car_map = y_car_map + WHEELBASE * math.sin(heading_car_map)
-    
+
+        # Find nearest point
         dx = x_car_map - self.waypoints_x
         dy = y_car_map - self.waypoints_y
         distances = np.hypot(dx, dy)
-        goal_index = (np.argmin(distances) + 5) % len(self.waypoints_x)
-        # for i in range(distances.size):
-        #     if distances[(start_index + i) % distances.size] > LOOKAHEAD_DISTANCE:
-        #         break
-        # if i == distances.size - 1:
-        #     raise RuntimeError('Exhausted waypoints')
-        # self.goal_index = (start_index + i) % distances.size
-
+        goal_index = (np.argmin(distances) + 4) % len(self.waypoints_x)
+        
         self.goal_index = goal_index
         x_goal_map, y_goal_map = self.waypoints_x[goal_index], self.waypoints_y[goal_index]
         heading_goal_map = self.waypoints_heading[goal_index]
 
-        crosstrack_error = (-(x_goal_map - x_car_map) * math.sin(heading_goal_map) + 
+        crosstrack_error = ((x_goal_map - x_car_map) * math.sin(heading_goal_map) - 
                             (y_goal_map - y_car_map) * math.cos(heading_goal_map))
         
-        # feedforward_term = heading_goal_laser
+        # feedforward_term = 
 
         heading_error = self.normalize_angle(heading_goal_map - heading_car_map)
-        heading_term = K_HEADING * heading_error
+        heading_term = params.k_heading.v * heading_error
 
-        cross_track_term = math.atan2((K_ERROR * crosstrack_error), (K_SOFTENING + self.speed))
+        cross_track_term = math.atan2((params.k_error.v * crosstrack_error), (params.k_softening.v + self.speed))
 
-        # yaw_damping = -K_DAMPING * YAW_RATE
+        # yaw_damping = 
         
         delta = heading_term + cross_track_term # + yaw_damping + feedforward_term
+
+        # ===================================================================================
 
         self.angle = np.clip(delta, -MAX_STEER, MAX_STEER)
 
@@ -181,13 +190,8 @@ class Stanley(Node):
         self.pub_dynamic_viz.publish(goal_marker)
 
     def get_speed(self):
-        if abs(self.angle) > np.radians(20.0):
-            return 2.0
-        elif abs(self.angle) > np.radians(10.0):
-            return 4.0
-        else:
-            return 6.0
-
+        return params.speed.v
+        
     def publish_drive(self):
         ackermann_drive_result = AckermannDriveStamped()
         ackermann_drive_result.header.stamp = self.get_clock().now().to_msg()
@@ -234,13 +238,49 @@ class Stanley(Node):
     def normalize_angle(self, angle):
         return math.atan2(math.sin(angle), math.cos(angle))
 
+    def check_input(self):
+        global params
+        key = self.get_key()
+        if not key:
+            return
+        if key == ' ':
+            params.speed.v = 0.0
+            print('stopped')
+        for name, d in vars(params).items():
+            if d.keys is None:
+                continue
+            k1, k2 = d.keys
+            if key == k1:
+                d.v -= 0.1
+            elif key == k1.upper():
+                d.v -= 1.0
+            elif key == k2:
+                d.v += 0.1
+            elif key == k2.upper():
+                d.v += 1.0
+            else:
+                continue
+            print(name, '=', d.v)
+            break
+
+    def get_key(self):
+        rlist, _, _ = select.select([sys.stdin], [], [], 0.005)
+        if rlist:
+            return sys.stdin.read(1)
+        return None
+
 def main(args=None):
     rclpy.init(args=args)
     print("Stanley Initialized")
-    stanley_node = Stanley()
-    rclpy.spin(stanley_node)
-    stanley_node.destroy_node()
-    rclpy.shutdown()
+    node = Stanley()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        print('Keyboard interrupt')
+    finally:
+        termios.tcsetattr(node.fd, termios.TCSADRAIN, node.terminal_settings)
+        node.destroy_node()
+        rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

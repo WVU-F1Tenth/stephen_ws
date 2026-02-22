@@ -2,7 +2,7 @@
 import rclpy
 from rclpy.node import Node
 from ackermann_msgs.msg import AckermannDriveStamped
-from geometry_msgs.msg import Point, PointStamped
+from geometry_msgs.msg import Point, PointStamped, PoseStamped, Quaternion
 from nav_msgs.msg import Odometry
 from visualization_msgs.msg import Marker
 import numpy as np
@@ -13,10 +13,14 @@ from rclpy.time import Time
 from typing import Tuple
 from pathlib import Path
 import tf2_geometry_msgs
-from rclpy.time import Time
 import math
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 import os
+import select
+import termios
+import sys
+import tty
+from types import SimpleNamespace
 
 map_path = os.environ.get('MAP_PATH')
 if map_path is None:
@@ -25,10 +29,16 @@ CSV_PATH = Path(map_path+'_raceline.csv')
 if not CSV_PATH.exists():
     raise RuntimeError("Waypoint file doesn't exist")
 
-LOOKAHEAD_DISTANCE = 1.20
-WHEELBASE = 0.3
-MAX_STEER = 0.42
+SIMULATOR = True
+
+LOOKAHEAD = 1.20
+WHEELBASE = 0.33
+MAX_STEER = 0.38
 VIS_RATE = 5.0
+
+params = SimpleNamespace(
+    speed=SimpleNamespace(v=0.0, keys=('s', 'd')),
+    )
 
 class PurePursuit(Node):
     def __init__(self):
@@ -46,6 +56,7 @@ class PurePursuit(Node):
         self.vis_timer = self.create_timer(1.0 / VIS_RATE, self.publish_markers)
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+        self.keyboard_timer = self.create_timer(.2, self.check_input)
 
         # Reading CSV data
         self.path_marker = Marker()
@@ -69,52 +80,78 @@ class PurePursuit(Node):
         self.path_published = False
 
         self.angle = 0.0
-        self.x_odom = 0.0
-        self.y_odom = 0.0
-        self.heading_odom = 0.0
-
+        self.speed = 0.0
+        self.goal_index = 0
+        
         df = pd.read_csv(CSV_PATH, header=None, comment='#', sep=',')
         self.waypoints_x = df.iloc[:, 0].to_numpy(dtype=float)
         self.waypoints_y = df.iloc[:, 1].to_numpy(dtype=float)
-        self.waypoints_heading = None
+        self.waypoints_heading = df.iloc[:, 2].to_numpy(dtype=float)
         self.path_marker.points = [Point(x=float(x), y=float(y), z=0.0)
                               for x, y in zip(self.waypoints_x, self.waypoints_y)]
+        
+        print('Command (space=stop, sd=speed)')
+        self.fd = sys.stdin.fileno()
+        self.terminal_settings = termios.tcgetattr(self.fd)
+        tty.setcbreak(self.fd)
 
     def pose_callback(self, odometry_info):
-        self.x_odom = odometry_info.pose.pose.position.x
-        self.y_odom = odometry_info.pose.pose.position.y
-        siny_cosp = 2.0 * (odometry_info.pose.pose.orientation.w * odometry_info.pose.pose.orientation.z + 
-                           odometry_info.pose.pose.orientation.x * odometry_info.pose.pose.orientation.y)
-        cosy_cosp = 1.0 - 2.0 * (odometry_info.pose.pose.orientation.y * odometry_info.pose.pose.orientation.y + 
-                                 odometry_info.pose.pose.orientation.z * odometry_info.pose.pose.orientation.z)
-        self.heading_odom = np.arctan2(siny_cosp, cosy_cosp)
-        
-        # Get goal point
-        x_map, y_map = self.x_odom, self.y_odom
-        dx = x_map - self.waypoints_x
-        dy = y_map - self.waypoints_y
+        x_car_odom = odometry_info.pose.pose.position.x
+        y_car_odom = odometry_info.pose.pose.position.y
+        heading_car_odom = self.quaternion_to_heading(odometry_info.pose.pose.orientation)
+
+        if SIMULATOR:
+            x_car_map, y_car_map = x_car_odom, y_car_odom
+            heading_car_map = heading_car_odom
+        else:
+            point_car_map = self.transform(
+                'odom',
+                'map',
+                x_car_odom,
+                y_car_odom,
+                heading_car_odom
+                )
+            if point_car_map is None:
+                return
+            x_car_map, y_car_map, heading_car_map = point_car_map # type: ignore
+
+        # ===================================================================================
+
+        # Find nearest point
+        dx = x_car_map - self.waypoints_x
+        dy = y_car_map - self.waypoints_y
         d = np.hypot(dx, dy)
         start_index = np.argmin(d)
         for i in range(d.size):
-            if d[(start_index + i) % d.size] > LOOKAHEAD_DISTANCE:
+            if d[(start_index + i) % d.size] > LOOKAHEAD:
                 break
         if i == d.size - 1:
             raise RuntimeError('Exhausted waypoints')
         self.goal_index = (start_index + i) % d.size
 
         # Transform goal point to vehicle frame of reference
-        x_goal_base_link, y_goal_base_link = self.tfxy(
-            'map', 'ego_racecar/base_link', self.waypoints_x[self.goal_index], self.waypoints_y[self.goal_index])
-        if x_goal_base_link is None:
+        point_goal_car = self.transform(
+            'map', 
+            'ego_racecar/base_link', 
+            self.waypoints_x[self.goal_index], 
+            self.waypoints_y[self.goal_index],
+            self.waypoints_heading[self.goal_index])
+        if point_goal_car is None:
             return
+        x_goal_car, y_goal_car, heading_goal_car = point_goal_car # type: ignore
 
         # Calculate curvature/steering angle
-        L = np.hypot(x_goal_base_link, y_goal_base_link)
-        gamma = 2*y_goal_base_link/L**2
+        L = np.hypot(x_goal_car, y_goal_car)
+        gamma = 2*y_goal_car/L**2
         delta = np.arctan(WHEELBASE*gamma)
+
+        # ===================================================================================
+
         self.angle = np.clip(delta, -MAX_STEER, MAX_STEER)
 
-        self.reactive_control()
+        self.speed = self.get_speed()
+
+        self.publish_drive()
         
     def publish_markers(self):
         # Visualization marker for current goal point
@@ -123,7 +160,8 @@ class PurePursuit(Node):
         point.x = self.waypoints_x[self.goal_index]
         point.y = self.waypoints_y[self.goal_index]
         point.z = 0.0
-        goal_marker.points.append(point) # type: ignore
+        goal_marker.points = []
+        goal_marker.points.append(point)
         goal_marker.header.frame_id = "map"
         goal_marker.id = 1
         goal_marker.type = Marker.POINTS
@@ -147,43 +185,98 @@ class PurePursuit(Node):
             self.path_published = True
         self.pub_dynamic_viz.publish(goal_marker)
 
-    def reactive_control(self):
+    def get_speed(self):
+        return params.speed.v
+
+    def publish_drive(self):
         ackermann_drive_result = AckermannDriveStamped()
         ackermann_drive_result.header.stamp = self.get_clock().now().to_msg()
         ackermann_drive_result.drive.steering_angle = self.angle
-        if abs(self.angle) > np.radians(20.0):
-            ackermann_drive_result.drive.speed = 2.0
-        elif abs(self.angle) > np.radians(10.0):
-            ackermann_drive_result.drive.speed = 4.0
-        else:
-            ackermann_drive_result.drive.speed = 6.0
+        ackermann_drive_result.drive.speed = self.speed
         self.pub_drive.publish(ackermann_drive_result)
 
-    def tfxy(self, from_frame, to_frame, x_from: float, y_from: float) -> Tuple[float, float]:
+    def transform(self, from_frame, to_frame, x_from, y_from, yaw):
         try:
-            p1 = PointStamped()
+            p1 = PoseStamped()
             p1.header.frame_id = from_frame
             p1.header.stamp = Time().to_msg()
-            p1.point.x = float(x_from)
-            p1.point.y = float(y_from)
-            p1.point.z = 0.0
+            p1.pose.position.x = float(x_from)
+            p1.pose.position.y = float(y_from)
+            p1.pose.position.z = 0.0
+            quat = self.heading_to_quaternion(yaw)
+            p1.pose.orientation.z = quat.z
+            p1.pose.orientation.w = quat.w
             p2 = self.tf_buffer.transform(
                 p1,
                 to_frame,
                 timeout=Duration(seconds=0.05), # type: ignore
             )
-            return p2.point.x, p2.point.y
+            heading = self.quaternion_to_heading(p2.pose.orientation)
+            x, y = p2.pose.position.x, p2.pose.position.y
+            return x, y, heading
         except tf2_ros.TransformException as e: # type: ignore
             self.get_logger().warn(f"TF unavailable: {e}")
-            return None, None # type: ignore
+            return None
+        
+    def quaternion_to_heading(self, q):
+        siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
+        cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+        return np.arctan2(siny_cosp, cosy_cosp)
+    
+    def heading_to_quaternion(self, yaw):
+        q = Quaternion()
+        q.x = 0.0
+        q.y = 0.0
+        q.z = math.sin(yaw / 2.0)
+        q.w = math.cos(yaw / 2.0)
+        return q
+    
+    def normalize_angle(self, angle):
+        return math.atan2(math.sin(angle), math.cos(angle))
+
+    def check_input(self):
+        global params
+        key = self.get_key()
+        if not key:
+            return
+        if key == ' ':
+            params.speed.v = 0.0
+            print('stopped')
+        for name, d in vars(params).items():
+            if d.keys is None:
+                continue
+            k1, k2 = d.keys
+            if key == k1:
+                d.v -= 0.1
+            elif key == k1.upper():
+                d.v -= 1.0
+            elif key == k2:
+                d.v += 0.1
+            elif key == k2.upper():
+                d.v += 1.0
+            else:
+                continue
+            print(name, '=', d.v)
+            break
+
+    def get_key(self):
+        rlist, _, _ = select.select([sys.stdin], [], [], 0.005)
+        if rlist:
+            return sys.stdin.read(1)
+        return None
 
 def main(args=None):
     rclpy.init(args=args)
     print("PurePursuit Initialized")
-    pure_pursuit_node = PurePursuit()
-    rclpy.spin(pure_pursuit_node)
-    pure_pursuit_node.destroy_node()
-    rclpy.shutdown()
+    node = PurePursuit()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        print('Keyboard interrupt')
+    finally:
+        termios.tcsetattr(node.fd, termios.TCSADRAIN, node.terminal_settings)
+        node.destroy_node()
+        rclpy.shutdown()
 
 if __name__ == '__main__':
     main()
