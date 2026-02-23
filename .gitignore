@@ -21,4 +21,3 @@ wheelhouse/
 *.tmp
 .DS_Store
 .venv/
-maps/

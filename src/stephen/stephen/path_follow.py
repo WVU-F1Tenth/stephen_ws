@@ -40,9 +40,9 @@ HERTZ = 40.0
 VISUALS = True
 LINE_STEERING_MARKER = True
 ARC_STEERING_MARKER = False
-PUBLISH_POINTS1 = False
-PUBLISH_POINTS2 = False
-PUBLISH_POINTS3 = False
+PUBLISH_POINTS1 = True
+PUBLISH_POINTS2 = True
+PUBLISH_POINTS3 = True
 PUBLISH_V1 = True
 PUBLISH_V2 = True
 VISUAL_HERTZ = 5.0
@@ -51,8 +51,8 @@ FAST_PRINT = False
 
 params = SimpleNamespace(
     speed=SimpleNamespace(v=0.0, keys=('s', 'd')),
-    smoothing_exp=SimpleNamespace(v=0.0, keys=('j', 'k')),
-    disparity_threshold=SimpleNamespace(v=0.0, keys=('h', 'l')),
+    smoothing_exp=SimpleNamespace(v=1.4, keys=('j', 'k')),
+    disparity_threshold=SimpleNamespace(v=0.5, keys=('h', 'l')),
     )
 
 file_info = SimpleNamespace(**{
