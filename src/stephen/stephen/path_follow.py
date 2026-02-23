@@ -49,9 +49,11 @@ VISUAL_HERTZ = 5.0
 FILE_OUTPUT = True
 FAST_PRINT = False
 
-FLAT_SPEED = 0.0
-SMOOTHING_EXP = 2.0
-DISPARITY_THRESHOLD = 0.5
+params = SimpleNamespace(
+    speed=SimpleNamespace(v=0.0, keys=('s', 'd')),
+    smoothing_exp=SimpleNamespace(v=0.0, keys=('j', 'k')),
+    disparity_threshold=SimpleNamespace(v=0.0, keys=('h', 'l')),
+    )
 
 file_info = SimpleNamespace(**{
     'path_info':{},
@@ -64,8 +66,8 @@ class PathFollow(Node):
     
     def __init__(self):
         super().__init__('gap_follow')
-        self.drive_pub = self.create_publisher(AckermannDriveStamped, '/drive', 10)
         print(f'TTY: {sys.stdin.isatty()}')
+        self.drive_pub = self.create_publisher(AckermannDriveStamped, '/drive', 10)
         if HERTZ == 0.0:
             self.laser_scan_sub = self.create_subscription(LaserScan, '/scan', self.adjust, 10)
         else:
@@ -97,7 +99,7 @@ class PathFollow(Node):
         self.paths = []
         self.section = None
 
-        print('Command (x=stop, s=-speed, d=+speed, j=-exp, k=+exp, h-=threshold, l+=threshold)')
+        print('Command (space=stop, sd=speed, jk=exp, hl=threshold)')
         self.fd = sys.stdin.fileno()
         self.terminal_settings = termios.tcgetattr(self.fd)
         tty.setcbreak(self.fd)
@@ -355,36 +357,29 @@ class PathFollow(Node):
             self.points3_pub.publish(m)
 
     def check_input(self):
-        global FLAT_SPEED, SMOOTHING_EXP, DISPARITY_THRESHOLD
+        global params
         key = self.get_key()
-        if key:
-            if key == 's':
-                FLAT_SPEED -= .1
-                print(f'speed = {FLAT_SPEED:.2}')
-            elif key == 'd':
-                FLAT_SPEED += .1
-                print(f'speed = {FLAT_SPEED:.2}')
-            elif key == 'S':
-                FLAT_SPEED -= 1.0
-                print(f'speed = {FLAT_SPEED:.2}')
-            elif key == 'D':
-                FLAT_SPEED += 1.0
-                print(f'speed = {FLAT_SPEED:.2}')
-            elif key == 'j':
-                SMOOTHING_EXP -= .1
-                print(f'smoothing exp = {SMOOTHING_EXP:.2}')
-            elif key == 'k':
-                SMOOTHING_EXP += .1
-                print(f'smoothin exp = {SMOOTHING_EXP:.2}')
-            elif key == 'h':
-                DISPARITY_THRESHOLD -= .1
-                print(f'disparity threshold = {DISPARITY_THRESHOLD:.2}')
-            elif key == 'l':
-                DISPARITY_THRESHOLD += .1
-                print(f'disparity threshold = {DISPARITY_THRESHOLD:.2}')
-            elif key == 'x':
-                print('stopped')
-                FLAT_SPEED = 0.0
+        if not key:
+            return
+        if key == ' ':
+            params.speed.v = 0.0
+            print('stopped')
+        for name, d in vars(params).items():
+            if d.keys is None:
+                continue
+            k1, k2 = d.keys
+            if key == k1:
+                d.v -= 0.1
+            elif key == k1.upper():
+                d.v -= 1.0
+            elif key == k2:
+                d.v += 0.1
+            elif key == k2.upper():
+                d.v += 1.0
+            else:
+                continue
+            print(name, '=', d.v)
+            break
 
     def get_key(self):
         rlist, _, _ = select.select([sys.stdin], [], [], 0.01)
@@ -513,8 +508,9 @@ class Planner:
     
     def disparities(self, ranges):
         diffs = np.diff(ranges)
-        pos_disp = np.flatnonzero(diffs >= DISPARITY_THRESHOLD)
-        neg_disp = np.flatnonzero(diffs <= -DISPARITY_THRESHOLD)
+        threshold = params.disparity_threshold.v
+        pos_disp = np.flatnonzero(diffs >= threshold)
+        neg_disp = np.flatnonzero(diffs <= -threshold)
         return (pos_disp, neg_disp + 1)
     
     def get_paths(self, ranges, virtual, pos_disps, neg_disps):
@@ -673,7 +669,7 @@ class Smoothing:
         # Apply func
         if self.use_func:
             sign = -1 if target < 0 else 1
-            target = sign * self.limit * (abs(target)/self.limit)**SMOOTHING_EXP
+            target = sign * self.limit * (abs(target)/self.limit)**params.smoothing_exp.v
 
         # PID
         if self.use_pid:
@@ -725,10 +721,9 @@ class SpeedController:
             raise ValueError('Invalid Speed method')
 
     def flat(self, steering_angle, gap_depth):
-        global FLAT_SPEED
         if math.isnan(steering_angle) or not gap_depth:
             return 0.0
-        return FLAT_SPEED
+        return params.speed.v
 
     def fast(self, steering_angle, gap_depth):
         if math.isnan(steering_angle) or not gap_depth:
@@ -786,47 +781,47 @@ def main(args=None):
 if __name__ == '__main__':
     main()
 
-def modify_ranges_for_disparities(ranges, virtual, pos_disps, neg_disps):
-        for disp in pos_disps:
-            # Walk gap until intersection
-            disp_range = ranges[disp]
-            points = np.flatnonzero((ranges[disp+1:] <= disp_range) | (virtual[disp+1:] > disp_range))
-            if points.size:
-                left_intersect = points[0] + disp + 1
-            else:
-                continue
-            # Drop to intersection range
-            if virtual[left_intersect] > disp_range:
-                left_intersect -= 1
-                new_ext = virtual[left_intersect]
-            else:
-                new_ext = disp_range
-            # Backtrack until second intersection
-            points = np.flatnonzero((ranges[:disp] <= new_ext) | (virtual[:disp] > new_ext))
-            right_intersect = points[-1] if points.size else disp
-            if virtual[right_intersect] > new_ext:
-                right_intersect += 1
-            ranges_section = ranges[right_intersect: left_intersect + 1]
-            np.minimum(ranges_section, new_ext, out=ranges_section)
+# def modify_ranges_for_disparities(ranges, virtual, pos_disps, neg_disps):
+#         for disp in pos_disps:
+#             # Walk gap until intersection
+#             disp_range = ranges[disp]
+#             points = np.flatnonzero((ranges[disp+1:] <= disp_range) | (virtual[disp+1:] > disp_range))
+#             if points.size:
+#                 left_intersect = points[0] + disp + 1
+#             else:
+#                 continue
+#             # Drop to intersection range
+#             if virtual[left_intersect] > disp_range:
+#                 left_intersect -= 1
+#                 new_ext = virtual[left_intersect]
+#             else:
+#                 new_ext = disp_range
+#             # Backtrack until second intersection
+#             points = np.flatnonzero((ranges[:disp] <= new_ext) | (virtual[:disp] > new_ext))
+#             right_intersect = points[-1] if points.size else disp
+#             if virtual[right_intersect] > new_ext:
+#                 right_intersect += 1
+#             ranges_section = ranges[right_intersect: left_intersect + 1]
+#             np.minimum(ranges_section, new_ext, out=ranges_section)
 
-        for disp in neg_disps:
-            # Walk gap until intersection
-            disp_range = ranges[disp]
-            points = np.flatnonzero((ranges[:disp] <= disp_range) | (virtual[:disp] > disp_range))
-            if points.size:
-                right_intersect = points[-1]
-            else:
-                continue
-            # Drop to intersection range
-            if virtual[right_intersect] > disp_range:
-                right_intersect += 1
-                new_ext = virtual[right_intersect]
-            else:
-                new_ext = disp_range
-            # Backtrack until second intersection
-            points = np.flatnonzero((ranges[disp+1:] <= new_ext) | (virtual[disp+1:] > new_ext))
-            left_intersect = points[0] + disp + 1 if points.size else disp
-            if virtual[left_intersect] > new_ext:
-                left_intersect -= 1
-            ranges_section = ranges[right_intersect: left_intersect + 1]
-            np.minimum(ranges_section, new_ext, out=ranges_section)
+#         for disp in neg_disps:
+#             # Walk gap until intersection
+#             disp_range = ranges[disp]
+#             points = np.flatnonzero((ranges[:disp] <= disp_range) | (virtual[:disp] > disp_range))
+#             if points.size:
+#                 right_intersect = points[-1]
+#             else:
+#                 continue
+#             # Drop to intersection range
+#             if virtual[right_intersect] > disp_range:
+#                 right_intersect += 1
+#                 new_ext = virtual[right_intersect]
+#             else:
+#                 new_ext = disp_range
+#             # Backtrack until second intersection
+#             points = np.flatnonzero((ranges[disp+1:] <= new_ext) | (virtual[disp+1:] > new_ext))
+#             left_intersect = points[0] + disp + 1 if points.size else disp
+#             if virtual[left_intersect] > new_ext:
+#                 left_intersect -= 1
+#             ranges_section = ranges[right_intersect: left_intersect + 1]
+#             np.minimum(ranges_section, new_ext, out=ranges_section)
