@@ -131,22 +131,22 @@ class Stanley(Node):
         distances = np.hypot(dx, dy)
         goal_index = (np.argmin(distances) + 4) % len(self.waypoints_x)
         
+        # Get goal index params
         self.goal_index = goal_index
         x_goal_map, y_goal_map = self.waypoints_x[goal_index], self.waypoints_y[goal_index]
-        heading_goal_map = self.waypoints_heading[goal_index]
-
-        crosstrack_error = ((x_goal_map - x_car_map) * math.sin(heading_goal_map) - 
-                            (y_goal_map - y_car_map) * math.cos(heading_goal_map))
+        heading_goal_map = self.waypoints_heading[goal_index]        
         
         # feedforward_term = 
+
+        # yaw_damping = 
 
         heading_error = self.normalize_angle(heading_goal_map - heading_car_map)
         heading_term = params.k_heading.v * heading_error
 
+        crosstrack_error = ((x_car_map - x_goal_map) * math.sin(heading_car_map) - 
+                            (y_car_map - y_goal_map) * math.cos(heading_car_map))
         cross_track_term = math.atan2((params.k_error.v * crosstrack_error), (params.k_softening.v + self.speed))
 
-        # yaw_damping = 
-        
         delta = heading_term + cross_track_term # + yaw_damping + feedforward_term
 
         # ===================================================================================
