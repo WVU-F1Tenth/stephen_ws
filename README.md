@@ -1,3 +1,26 @@
+# General info
+- names icps1 and icps2
+- ip: 190.160.1.121 and 190.160.1.122
+- May need: export ROS_DOMAIN_ID=
+
+# Aliases
+SLAM
+```
+alias slam="cd $HOME/sim_ws/; source install/setup.bash; ros2 launch slam_toolbox online_async_launch.py slam_params_file:=/home/nvidia/f1tenth_ws/src/f1tenth_system/f1tenth_stack/config/f1tenth_online_async.yaml"
+```
+Particle filter
+```
+alias particle_filter="cd $HOME/sim_ws/; source install/setup.bash; ros2 launch particle_filter localize_launch.py"
+```
+F1tenth simulator
+```
+alias sim='cd ~/sim_ws/; source install/local_setup.bash; ros2 launch f1tenth_gym_ros gym_bridge_launch.py'
+```
+F1Tenth on car
+```
+alias f1tenth="cd $HOME/f1tenth_ws/; source install/setup.bash; ros2 launch f1tenth_stack brinup
+```
+
 # Setup venv
 ```bash
 python3 -m venv .venv
