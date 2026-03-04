@@ -14,12 +14,14 @@ def verify_and_fix_map(map_name):
     - White (255) = free drivable space
     - Gray (intermediate) = unknown
     """
-    
-    map_path = os.environ.get('MAP_PATH')
-    if map_path is None:
-        raise RuntimeError('MAP_PATH not set')
-    map_file = map_path+'_map.png'
-    backup_file = map_path+'_mapOG.png'
+    if map_name:
+        map_file = map_name
+    else:
+        map_path = os.environ.get('MAP_PATH')
+        if map_path is None:
+            raise RuntimeError('MAP_PATH not set')
+        map_file = map_path+'_map.png'
+        backup_file = map_path+'_mapOG.png'
 
     print(f"Checking map: {map_file}")
     
@@ -127,6 +129,6 @@ def verify_and_fix_map(map_name):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('map_name', help='Map name')
+    parser.add_argument('map_name', nargs='?',  default='', help='Map name')
     args = parser.parse_args()
     verify_and_fix_map(args.map_name)
