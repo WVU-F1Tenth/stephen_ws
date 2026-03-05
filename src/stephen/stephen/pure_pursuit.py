@@ -30,8 +30,9 @@ if not CSV_PATH.exists():
     raise RuntimeError("Waypoint file doesn't exist")
 
 SIMULATOR = True
+VELOCITIES=True
 
-LOOKAHEAD = 1.20
+LOOKAHEAD = 0.8
 WHEELBASE = 0.33
 MAX_STEER = 0.38
 VIS_RATE = 5.0
@@ -82,11 +83,14 @@ class PurePursuit(Node):
         self.angle = 0.0
         self.speed = 0.0
         self.goal_index = 0
+        self.nearest_index = 0
         
         df = pd.read_csv(CSV_PATH, header=None, comment='#', sep=',')
         self.waypoints_x = df.iloc[:, 0].to_numpy(dtype=float)
         self.waypoints_y = df.iloc[:, 1].to_numpy(dtype=float)
-        self.waypoints_heading = df.iloc[:, 2].to_numpy(dtype=float)
+        if VELOCITIES:
+            self.velocities = df.iloc[:, 2].to_numpy(dtype=float)
+        self.waypoints_heading = None
         self.path_marker.points = [Point(x=float(x), y=float(y), z=0.0)
                               for x, y in zip(self.waypoints_x, self.waypoints_y)]
         
@@ -122,6 +126,7 @@ class PurePursuit(Node):
         dy = y_car_map - self.waypoints_y
         d = np.hypot(dx, dy)
         start_index = np.argmin(d)
+        self.nearest_index = start_index
         for i in range(d.size):
             if d[(start_index + i) % d.size] > LOOKAHEAD:
                 break
@@ -135,7 +140,7 @@ class PurePursuit(Node):
             'ego_racecar/base_link', 
             self.waypoints_x[self.goal_index], 
             self.waypoints_y[self.goal_index],
-            self.waypoints_heading[self.goal_index])
+            0.0)
         if point_goal_car is None:
             return
         x_goal_car, y_goal_car, heading_goal_car = point_goal_car # type: ignore
@@ -185,8 +190,11 @@ class PurePursuit(Node):
             self.path_published = True
         self.pub_dynamic_viz.publish(goal_marker)
 
-    def get_speed(self):
-        return params.speed.v
+    def get_speed(self): 
+        if VELOCITIES and params.speed.v > 0.0:
+            return self.velocities[self.nearest_index]
+        else:
+            return params.speed.v
 
     def publish_drive(self):
         ackermann_drive_result = AckermannDriveStamped()
