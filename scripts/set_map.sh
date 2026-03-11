@@ -50,6 +50,7 @@ PF_MAPS="$HOME/sim_ws/src/particle_filter/maps/"
 if [ -d "$PF_MAPS" ]; then
     cp "${MAP_PATH}_map.png" "$PF_MAPS" 2>/dev/null || cp "${MAP_PATH}_map.pgm" "$PF_MAPS"
     cp "${MAP_PATH}_map.yaml" "$PF_MAPS"
+    echo "Copied map to particle filter"
 fi
 
 # Add to raceline maps
@@ -57,4 +58,5 @@ RL_MAPS="$HOME/Raceline-Optimization/maps"
 if [ -d "$RL_MAPS" ]; then
     cp "${MAP_PATH}_map.png" "$RL_MAPS" 2>/dev/null || cp "${MAP_PATH}_map.pgm" "$RL_MAPS"
     cp "${MAP_PATH}_map.yaml" "$RL_MAPS"
+    echo "Copied map to raceline"
 fi

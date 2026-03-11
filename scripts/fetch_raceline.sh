@@ -12,7 +12,7 @@ if [[ -z "$1" ]]; then
     return 1
 fi
 
-if [[ ! -n MAP_PATH ]]; then
+if [[ -z MAP_PATH ]]; then
     echo 'MAP_PATH not set'
     return 1
 fi
