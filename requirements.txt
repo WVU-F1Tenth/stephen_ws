@@ -5,3 +5,4 @@ simple_pid
 colcon-common-extensions
 vispy
 glfw
+pillow
