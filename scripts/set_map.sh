@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 
+# Map png/pgm and yaml file must be in src/stephen/data/maps/<map-name>
+# 1. Cleans map image
+# 2. Sets MAP_PATH variable the the current map and save in .bashrc
+# 3. Copies map files to particle filter and raceline optimization 
+
 # Ensure script is sourced, not executed
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     echo "ERROR: This script must be sourced:"
@@ -27,7 +32,7 @@ if [[ ! -f "${MAP_PATH}_map.yaml" ]]; then
 fi
 
 # Write MAP_PATH export to .bashrc
-echo "Writing to $HOME/.bashrc"
+echo "Writing to .bashrc"
 sed -i \
 -e "/^export MAP_PATH=.*/d" \
 -e "\$a export MAP_PATH=\"$MAP_PATH\"" \
