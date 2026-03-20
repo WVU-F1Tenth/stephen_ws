@@ -47,14 +47,14 @@ class PurePursuit(Node):
         
         # Create ROS subscribers and publishers
         self.pub_drive = self.create_publisher(AckermannDriveStamped, '/drive', 10)
-        self.pub_env_viz = self.create_publisher(Marker, '/env_viz', 10)
-        self.pub_dynamic_viz = self.create_publisher(Marker, '/dynamic_viz', 10)
+        self.raceline_viz = self.create_publisher(Marker, '/viz/raceline', 10)
+        self.goal_viz = self.create_publisher(Marker, '/viz/goal', 10)
         qos = QoSProfile(
             depth=10,
             reliability=ReliabilityPolicy.BEST_EFFORT
         )
         self.sub_odom = self.create_subscription(Odometry, '/ego_racecar/odom', self.pose_callback,  qos)
-        self.vis_timer = self.create_timer(1.0 / VIS_RATE, self.publish_markers)
+        self.viz_timer = self.create_timer(1.0 / VIS_RATE, self.publish_markers)
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
         self.keyboard_timer = self.create_timer(.2, self.check_input)
@@ -85,11 +85,11 @@ class PurePursuit(Node):
         self.goal_index = 0
         self.nearest_index = 0
         
-        df = pd.read_csv(CSV_PATH, header=None, comment='#', sep=',')
-        self.waypoints_x = df.iloc[:, 0].to_numpy(dtype=float)
-        self.waypoints_y = df.iloc[:, 1].to_numpy(dtype=float)
+        df = pd.read_csv(CSV_PATH, header=0, comment='#', sep=';')
+        self.waypoints_x = df.iloc[:, 1].to_numpy(dtype=float)
+        self.waypoints_y = df.iloc[:, 2].to_numpy(dtype=float)
         if VELOCITIES:
-            self.velocities = df.iloc[:, 2].to_numpy(dtype=float)
+            self.velocities = df.iloc[:, 5].to_numpy(dtype=float)
         self.waypoints_heading = None
         self.path_marker.points = [Point(x=float(x), y=float(y), z=0.0)
                               for x, y in zip(self.waypoints_x, self.waypoints_y)]
@@ -186,9 +186,9 @@ class PurePursuit(Node):
         goal_marker.color.b = 0.0
 
         if not self.path_published:
-            self.pub_env_viz.publish(self.path_marker)
+            self.raceline_viz.publish(self.path_marker)
             self.path_published = True
-        self.pub_dynamic_viz.publish(goal_marker)
+        self.goal_viz.publish(goal_marker)
 
     def get_speed(self): 
         if VELOCITIES and params.speed.v > 0.0:
