@@ -487,6 +487,7 @@ class Planner:
         self.disparity_threshold = disparity_threshold # threshold defining disparity
         self.extension = extension # wall extension distance
         self.track_direction = track_direction # ccw or cw
+        self.vdisps = None
 
     def apply_range_limit(self, ranges, limit):
         safe_gap_value = 100.0

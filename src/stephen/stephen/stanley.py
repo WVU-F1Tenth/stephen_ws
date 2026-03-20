@@ -141,7 +141,7 @@ class Stanley(Node):
         # yaw_damping = 
 
         heading_error = self.normalize_angle(heading_goal_map - heading_car_map)
-        heading_term = params.k_heading.v * heading_error
+        heading_term = params.k_heading.v * -heading_error
 
         crosstrack_error = ((x_car_map - x_goal_map) * math.sin(heading_car_map) - 
                             (y_car_map - y_goal_map) * math.cos(heading_car_map))

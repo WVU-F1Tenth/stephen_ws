@@ -12,6 +12,9 @@ from scipy.linalg import block_diag
 from scipy.sparse import block_diag, csc_matrix, diags
 from sensor_msgs.msg import LaserScan
 from utils import nearest_point
+from numpy import typing as npt
+from typing import Any
+
 
 # TODO CHECK: include needed ROS msg type headers and libraries
 
@@ -24,23 +27,23 @@ class mpc_config:
 
     # ---------------------------------------------------
     # TODO: you may need to tune the following matrices
-    Rk: list = field(
+    Rk: npt.NDArray[Any] = field(
         default_factory=lambda: np.diag([0.01, 100.0])
     )  # input cost matrix, penalty for inputs - [accel, steering_speed]
-    Rdk: list = field(
+    Rdk: npt.NDArray[Any] = field(
         default_factory=lambda: np.diag([0.01, 100.0])
     )  # input difference cost matrix, penalty for change of inputs - [accel, steering_speed]
-    Qk: list = field(
+    Qk: npt.NDArray[Any] = field(
         default_factory=lambda: np.diag([13.5, 13.5, 5.5, 13.0])
     )  # state error cost matrix, for the the next (T) prediction time steps [x, y, delta, v, yaw, yaw-rate, beta]
-    Qfk: list = field(
+    Qfk: npt.NDArray[Any] = field(
         default_factory=lambda: np.diag([13.5, 13.5, 5.5, 13.0])
     )  # final state error matrix, penalty  for the final state constraints: [x, y, delta, v, yaw, yaw-rate, beta]
     # ---------------------------------------------------
 
     N_IND_SEARCH: int = 20  # Search index number
-    DTK: float = 0.1  # time step [s] kinematic
-    dlk: float = 0.03  # dist step [m] kinematic
+    DTK: float = 0.1  # Time step used
+    dlk: float = 0.03  # Distance between reference points
     LENGTH: float = 0.58  # Length of the vehicle [m]
     WIDTH: float = 0.31  # Width of the vehicle [m]
     WB: float = 0.33  # Wheelbase [m]
@@ -72,6 +75,7 @@ class MPC(Node):
         self.waypoints = None
 
         self.config = mpc_config()
+        # Old inputs
         self.odelta_v = None
         self.odelta = None
         self.oa = None
@@ -257,14 +261,18 @@ class MPC(Node):
 
         # based on current velocity, distance traveled on the ref line between time steps
         travel = abs(state.v) * self.config.DTK
+        # Distance in index count
         dind = travel / self.config.dlk
+        # ind_list = [ind, ind+1*dind, ind+2*dind, ...]
         ind_list = int(ind) + np.insert(
             np.cumsum(np.repeat(dind, self.config.TK)), 0, 0
         ).astype(int)
+        # Where greater than or equal to ncourse, then -= ncourse
         ind_list[ind_list >= ncourse] -= ncourse
         ref_traj[0, :] = cx[ind_list]
         ref_traj[1, :] = cy[ind_list]
         ref_traj[2, :] = sp[ind_list]
+        # Anywere | yaw - course_yaw | > 4.5, shift by 2pi 
         cyaw[cyaw - state.yaw > 4.5] = np.abs(
             cyaw[cyaw - state.yaw > 4.5] - (2 * np.pi)
         )
