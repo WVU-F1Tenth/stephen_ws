@@ -51,8 +51,11 @@ FAST_PRINT = False
 
 params = SimpleNamespace(
     speed=SimpleNamespace(v=0.0, keys=('s', 'd')),
-    smoothing_exp=SimpleNamespace(v=1.4, keys=('j', 'k')),
     disparity_threshold=SimpleNamespace(v=0.5, keys=('h', 'l')),
+    steering_velocity_k=SimpleNamespace(v=0.0, keys=('j', 'k')),
+    key_msg=SimpleNamespace(
+        v='Commands(space=stop, speed=sd, disparity=hl, steering_velocity_k=jk)',
+        keys=None),
     )
 
 file_info = SimpleNamespace(**{
@@ -99,7 +102,7 @@ class PathFollow(Node):
         self.paths = []
         self.section = None
 
-        print('Command (space=stop, sd=speed, jk=exp, hl=threshold)')
+        print(params.key_msg.v)
         self.fd = sys.stdin.fileno()
         self.terminal_settings = termios.tcgetattr(self.fd)
         tty.setcbreak(self.fd)
@@ -144,7 +147,6 @@ class PathFollow(Node):
         self.speed_controller = SpeedController(
             # | flat | fast |
             method='flat',
-            flat_speed=1.,
             max_speed=100.0,
             a_slide=14.0,
             a_tip=10000.0,
@@ -226,6 +228,9 @@ class PathFollow(Node):
        
         drive_msg = AckermannDriveStamped()
         drive_msg.drive.steering_angle = steering_angle
+        sav_k = params.steering_velocity_k.v*0.1
+        sav = 0.0 if sav_k < 0.005 else sav_k * steering_angle
+        drive_msg.drive.steering_angle_velocity = sav
         drive_msg.drive.speed = speed
         self.drive_pub.publish(drive_msg)
 
@@ -378,7 +383,7 @@ class PathFollow(Node):
                 d.v += 1.0
             else:
                 continue
-            print(name, '=', d.v)
+            print(f'{name} = {d.v:.1f}')
             break
 
     def get_key(self):
@@ -626,15 +631,6 @@ class Steering:
         return angle
 
 class Smoothing:
-        # f0 = lambda x : x
-        # f1 = lambda x : (x**SMOOTHING_EXP)
-        # A = .2
-        # f2 = lambda x : (A * math.tan(math.atan(1/A) * x))
-        # a = 1.7
-        # b = 14
-        # c = -9
-        # f3 = lambda x : (1/(1+pow(a, -(b*x+c))) - 1/(1 + pow(a, -c)))
-
     def __init__(self, use_func, use_filter, use_pid, use_slew, tau, slew_rate, pid):
         self.use_func = use_func
         self.use_filter = use_filter
@@ -702,8 +698,7 @@ class Smoothing:
         
 class SpeedController:
 
-    def __init__(self, method, flat_speed, max_speed, a_slide, a_tip):
-        self.flat_speed = flat_speed
+    def __init__(self, method, max_speed, a_slide, a_tip):
         self.min_speed = math.sqrt(min(a_slide, a_tip) * Vehicle.wheelbase / math.tan(Vehicle.max_steering_angle))
         file_info.other['min_speed'] = self.min_speed
         self.max_speed = max_speed
