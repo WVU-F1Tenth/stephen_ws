@@ -30,15 +30,16 @@ if not CSV_PATH.exists():
     raise RuntimeError("Waypoint file doesn't exist")
 
 SIMULATOR = True
-VELOCITIES=True
 
-LOOKAHEAD = 0.8
 WHEELBASE = 0.33
 MAX_STEER = 0.38
-VIS_RATE = 5.0
+VIZ_RATE = 5.0
 
+# Used to bind scalars to keys were lowercase increments 0.1 and uppercase increment 1.0
 params = SimpleNamespace(
     speed=SimpleNamespace(v=0.0, keys=('s', 'd')),
+    lookahead=SimpleNamespace(v=0.8, keys=('j', 'k')),
+    use_v=SimpleNamespace(v=False, keys=None),
     )
 
 class PurePursuit(Node):
@@ -54,7 +55,7 @@ class PurePursuit(Node):
             reliability=ReliabilityPolicy.BEST_EFFORT
         )
         self.sub_odom = self.create_subscription(Odometry, '/ego_racecar/odom', self.pose_callback,  qos)
-        self.viz_timer = self.create_timer(1.0 / VIS_RATE, self.publish_markers)
+        self.viz_timer = self.create_timer(1.0 / VIZ_RATE, self.publish_markers)
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
         self.keyboard_timer = self.create_timer(.2, self.check_input)
@@ -88,8 +89,8 @@ class PurePursuit(Node):
         df = pd.read_csv(CSV_PATH, header=0, comment='#', sep=';')
         self.waypoints_x = df.iloc[:, 1].to_numpy(dtype=float)
         self.waypoints_y = df.iloc[:, 2].to_numpy(dtype=float)
-        if VELOCITIES:
-            self.velocities = df.iloc[:, 5].to_numpy(dtype=float)
+        self.velocities = df.iloc[:, 5].to_numpy(dtype=float)
+        self.accelerations = df.iloc[:, 6].to_numpy(dtype=float)
         self.waypoints_heading = None
         self.path_marker.points = [Point(x=float(x), y=float(y), z=0.0)
                               for x, y in zip(self.waypoints_x, self.waypoints_y)]
@@ -128,7 +129,7 @@ class PurePursuit(Node):
         start_index = np.argmin(d)
         self.nearest_index = start_index
         for i in range(d.size):
-            if d[(start_index + i) % d.size] > LOOKAHEAD:
+            if d[(start_index + i) % d.size] > params.lookahead.v:
                 break
         if i == d.size - 1:
             raise RuntimeError('Exhausted waypoints')
@@ -147,6 +148,8 @@ class PurePursuit(Node):
 
         # Calculate curvature/steering angle
         L = np.hypot(x_goal_car, y_goal_car)
+        if L < 1e-6:
+            return
         gamma = 2*y_goal_car/L**2
         delta = np.arctan(WHEELBASE*gamma)
 
@@ -190,11 +193,14 @@ class PurePursuit(Node):
             self.path_published = True
         self.goal_viz.publish(goal_marker)
 
-    def get_speed(self): 
-        if VELOCITIES and params.speed.v > 0.0:
-            return self.velocities[self.nearest_index]
+    def get_speed(self):
+        coeff = params.speed.v
+        if params.use_v.v == True:
+            # Safety
+            coeff = min(coeff, 1.8)
+            return coeff * self.velocities[self.nearest_index]
         else:
-            return params.speed.v
+            return coeff
 
     def publish_drive(self):
         ackermann_drive_result = AckermannDriveStamped()
@@ -250,22 +256,32 @@ class PurePursuit(Node):
         if key == ' ':
             params.speed.v = 0.0
             print('stopped')
-        for name, d in vars(params).items():
-            if d.keys is None:
-                continue
-            k1, k2 = d.keys
-            if key == k1:
-                d.v -= 0.1
-            elif key == k1.upper():
-                d.v -= 1.0
-            elif key == k2:
-                d.v += 0.1
-            elif key == k2.upper():
-                d.v += 1.0
+        elif key == 'v':
+            if params.use_v.v == False:
+                params.use_v.v = True
+                print('Velocities Mode')
             else:
-                continue
-            print(name, '=', d.v)
-            break
+                params.use_v.v = False
+                print('Manual Speed')
+            params.speed.v = 0.0
+            print('speed = 0.0')
+        else:
+            for name, d in vars(params).items():
+                if d.keys is None:
+                    continue
+                k1, k2 = d.keys
+                if key == k1:
+                    d.v -= 0.1
+                elif key == k1.upper():
+                    d.v -= 1.0
+                elif key == k2:
+                    d.v += 0.1
+                elif key == k2.upper():
+                    d.v += 1.0
+                else:
+                    continue
+                print(name, '=', d.v)
+                break
 
     def get_key(self):
         rlist, _, _ = select.select([sys.stdin], [], [], 0.005)

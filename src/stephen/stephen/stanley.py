@@ -31,17 +31,18 @@ if not CSV_PATH.exists():
 
 SIMULATOR = True
 
-LOOKAHEAD = 1.20
 WHEELBASE = 0.33
 MAX_STEER = 0.38
-VIS_RATE = 5.0
+VIZ_RATE = 5.0
 
+# Used to bind scalars to keys were lowercase increments 0.1 and uppercase increment 1.0
 params = SimpleNamespace(
     speed=SimpleNamespace(v=0.0, keys=('s', 'd')),
     k_error=SimpleNamespace(v=1.5, keys=('j', 'k')), # Cross-track error gain - main error
     k_heading=SimpleNamespace(v=0.0, keys=('h', 'l')), # Heading gain - helps smooth higher speeds
     k_softening=SimpleNamespace(v=1.0, keys=None), # Softening contant - helps smooth low speeds
     k_damping=SimpleNamespace(v=0.0, keys=None), # Alternative to heading gain - helps smooth high speeds
+    use_v=SimpleNamespace(v=False, keys=None),
 )
 
 class Stanley(Node):
@@ -57,7 +58,7 @@ class Stanley(Node):
             reliability=ReliabilityPolicy.BEST_EFFORT
         )
         self.sub_odom = self.create_subscription(Odometry, '/ego_racecar/odom', self.pose_callback,  qos)
-        self.viz_timer = self.create_timer(1.0 / VIS_RATE, self.publish_markers)
+        self.viz_timer = self.create_timer(1.0 / VIZ_RATE, self.publish_markers)
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
         self.keyboard_timer = self.create_timer(.2, self.check_input)
@@ -87,7 +88,7 @@ class Stanley(Node):
         self.speed = 0.0
         self.goal_index = 0
         
-        df = pd.read_csv(CSV_PATH, header=None, comment='#', sep=',')
+        df = pd.read_csv(CSV_PATH, header=0, comment='#', sep=';')
         self.waypoints_x = df.iloc[:, 1].to_numpy(dtype=float)
         self.waypoints_y = df.iloc[:, 2].to_numpy(dtype=float)
         self.waypoints_heading = df.iloc[:, 3].to_numpy(dtype=float)
@@ -131,10 +132,11 @@ class Stanley(Node):
         dx = x_car_map - self.waypoints_x
         dy = y_car_map - self.waypoints_y
         distances = np.hypot(dx, dy)
-        goal_index = (np.argmin(distances) + 4) % len(self.waypoints_x)
+        self.nearest_index = np.argmin(distances)
+        self.goal_index = (self.nearest_index + 4) % len(self.waypoints_x)
         
         # Get goal index params
-        self.goal_index = goal_index
+        goal_index = self.goal_index
         x_goal_map, y_goal_map = self.waypoints_x[goal_index], self.waypoints_y[goal_index]
         heading_goal_map = self.waypoints_heading[goal_index]        
         
@@ -192,7 +194,13 @@ class Stanley(Node):
         self.goal_viz.publish(goal_marker)
 
     def get_speed(self):
-        return params.speed.v
+        coeff = params.speed.v
+        if params.use_v.v == True:
+            # Safety
+            coeff = min(coeff, 1.8)
+            return coeff * self.velocities[self.nearest_index]
+        else:
+            return coeff
         
     def publish_drive(self):
         ackermann_drive_result = AckermannDriveStamped()
@@ -248,22 +256,32 @@ class Stanley(Node):
         if key == ' ':
             params.speed.v = 0.0
             print('stopped')
-        for name, d in vars(params).items():
-            if d.keys is None:
-                continue
-            k1, k2 = d.keys
-            if key == k1:
-                d.v -= 0.1
-            elif key == k1.upper():
-                d.v -= 1.0
-            elif key == k2:
-                d.v += 0.1
-            elif key == k2.upper():
-                d.v += 1.0
+        elif key == 'v':
+            if params.use_v.v == False:
+                params.use_v.v = True
+                print('Velocities Mode')
             else:
-                continue
-            print(name, '=', d.v)
-            break
+                params.use_v.v = False
+                print('Manual Speed')
+            params.speed.v = 0.0
+            print('speed = 0.0')
+        else:
+            for name, d in vars(params).items():
+                if d.keys is None:
+                    continue
+                k1, k2 = d.keys
+                if key == k1:
+                    d.v -= 0.1
+                elif key == k1.upper():
+                    d.v -= 1.0
+                elif key == k2:
+                    d.v += 0.1
+                elif key == k2.upper():
+                    d.v += 1.0
+                else:
+                    continue
+                print(name, '=', d.v)
+                break
 
     def get_key(self):
         rlist, _, _ = select.select([sys.stdin], [], [], 0.005)
