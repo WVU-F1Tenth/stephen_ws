@@ -38,11 +38,15 @@ VIZ_RATE = 5.0
 # Used to bind scalars to keys were lowercase increments 0.1 and uppercase increment 1.0
 params = SimpleNamespace(
     speed=SimpleNamespace(v=0.0, keys=('s', 'd')),
+    lookahead=SimpleNamespace(v=0.8, keys=('a', 'f')),
     k_error=SimpleNamespace(v=1.5, keys=('j', 'k')), # Cross-track error gain - main error
     k_heading=SimpleNamespace(v=0.0, keys=('h', 'l')), # Heading gain - helps smooth higher speeds
     k_softening=SimpleNamespace(v=1.0, keys=None), # Softening contant - helps smooth low speeds
     k_damping=SimpleNamespace(v=0.0, keys=None), # Alternative to heading gain - helps smooth high speeds
     use_v=SimpleNamespace(v=False, keys=None),
+    key_msg=SimpleNamespace(
+        v='Commands(space=stop, sd=speed, lookahead=af, jk=k_error, hl=k_heading)',
+        keys=None),
 )
 
 class Stanley(Node):
@@ -93,11 +97,14 @@ class Stanley(Node):
         self.waypoints_y = df.iloc[:, 2].to_numpy(dtype=float)
         self.waypoints_heading = df.iloc[:, 3].to_numpy(dtype=float)
         self.velocities = df.iloc[:, 5]
-        self.accelerations = df.iloc[:, 6]
         self.path_marker.points = [Point(x=float(x), y=float(y), z=0.0)
                               for x, y in zip(self.waypoints_x, self.waypoints_y)]
         
-        print('Command (space=stop, sd=speed, jk=k_error, hl=k_heading)')
+        # dists[0] = distance from point 0 to point 1
+        self.dists = np.hypot(np.diff(self.waypoints_x), np.diff(self.waypoints_y))
+        self.dist_sums = np.cumsum(np.append(self.dists, self.dists))
+        
+        print(params.key_msg.v)
         self.fd = sys.stdin.fileno()
         self.terminal_settings = termios.tcgetattr(self.fd)
         tty.setcbreak(self.fd)
@@ -131,14 +138,17 @@ class Stanley(Node):
         # Find nearest point
         dx = x_car_map - self.waypoints_x
         dy = y_car_map - self.waypoints_y
-        distances = np.hypot(dx, dy)
-        self.nearest_index = np.argmin(distances)
-        self.goal_index = (self.nearest_index + 4) % len(self.waypoints_x)
+        d = np.hypot(dx, dy)
+        self.nearest_index = np.argmin(d)
+        
+        # Find goal point (arc length lookahead)
+        relative_dists = self.dist_sums - self.dist_sums[self.nearest_index]
+        self.goal_index = np.searchsorted(relative_dists, params.lookahead.v) % d.size
         
         # Get goal index params
         goal_index = self.goal_index
         x_goal_map, y_goal_map = self.waypoints_x[goal_index], self.waypoints_y[goal_index]
-        heading_goal_map = self.waypoints_heading[goal_index]        
+        heading_goal_map = self.waypoints_heading[goal_index]
         
         # feedforward_term = 
 
@@ -198,7 +208,7 @@ class Stanley(Node):
         if params.use_v.v == True:
             # Safety
             coeff = min(coeff, 1.8)
-            return coeff * self.velocities[self.nearest_index]
+            return coeff * self.velocities[self.goal_index]
         else:
             return coeff
         
@@ -259,7 +269,7 @@ class Stanley(Node):
         elif key == 'v':
             if params.use_v.v == False:
                 params.use_v.v = True
-                print('Velocities Mode')
+                print('Velocities Mode (speed is coeff)')
             else:
                 params.use_v.v = False
                 print('Manual Speed')
@@ -280,7 +290,7 @@ class Stanley(Node):
                     d.v += 1.0
                 else:
                     continue
-                print(name, '=', d.v)
+                print(f'{name} = {d.v:.1f}')
                 break
 
     def get_key(self):

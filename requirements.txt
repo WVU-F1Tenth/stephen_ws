@@ -4,7 +4,7 @@ scipy
 pandas
 simple_pid
 colcon-common-extensions
-vispy
-glfw
+# vispy
+# glfw
 pillow
 cvxpy
