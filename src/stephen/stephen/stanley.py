@@ -38,9 +38,9 @@ VIZ_RATE = 5.0
 # Used to bind scalars to keys were lowercase increments 0.1 and uppercase increment 1.0
 params = SimpleNamespace(
     speed=SimpleNamespace(v=0.0, keys=('s', 'd')),
-    lookahead=SimpleNamespace(v=0.8, keys=('a', 'f')),
-    k_error=SimpleNamespace(v=1.5, keys=('j', 'k')), # Cross-track error gain - main error
-    k_heading=SimpleNamespace(v=0.0, keys=('h', 'l')), # Heading gain - helps smooth higher speeds
+    lookahead=SimpleNamespace(v=0.3, keys=('a', 'f')),
+    k_error=SimpleNamespace(v=1.0, keys=('j', 'k')), # Cross-track error gain - main error
+    k_heading=SimpleNamespace(v=0.5, keys=('h', 'l')), # Heading gain - helps smooth higher speeds
     k_softening=SimpleNamespace(v=1.0, keys=None), # Softening contant - helps smooth low speeds
     k_damping=SimpleNamespace(v=0.0, keys=None), # Alternative to heading gain - helps smooth high speeds
     use_v=SimpleNamespace(v=False, keys=None),
@@ -149,13 +149,16 @@ class Stanley(Node):
         goal_index = self.goal_index
         x_goal_map, y_goal_map = self.waypoints_x[goal_index], self.waypoints_y[goal_index]
         heading_goal_map = self.waypoints_heading[goal_index]
-        
+
+        # ===================================================================================
+
         # feedforward_term = 
 
         # yaw_damping = 
 
-        heading_error = self.normalize_angle(heading_goal_map - heading_car_map)
-        heading_term = params.k_heading.v * -heading_error
+        angle_diff = heading_car_map - heading_goal_map
+        heading_error = math.atan2(math.cos(angle_diff), math.sin(angle_diff))
+        heading_term = params.k_heading.v * heading_error
 
         crosstrack_error = ((x_car_map - x_goal_map) * math.sin(heading_car_map) - 
                             (y_car_map - y_goal_map) * math.cos(heading_car_map))
@@ -255,9 +258,6 @@ class Stanley(Node):
         q.w = math.cos(yaw / 2.0)
         return q
     
-    def normalize_angle(self, angle):
-        return math.atan2(math.sin(angle), math.cos(angle))
-
     def check_input(self):
         global params
         key = self.get_key()
