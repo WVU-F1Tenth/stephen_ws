@@ -34,8 +34,12 @@ fi
 echo 'Fetching map from car...'
 
 # Copy map from car
-scp "${CAR_USER}@${CAR_IP}:/home/${CAR_USER}/sim_ws/maps/${1}.pgm" \
+if ! scp \
+    "${CAR_USER}@${CAR_IP}:/home/${CAR_USER}/sim_ws/maps/${1}.pgm" \
     "${CAR_USER}@${CAR_IP}:/home/${CAR_USER}/sim_ws/maps/${1}.yaml" \
-    "$HOME/stephen_ws/src/stephen/data/maps/${1}/"
+    "$HOME/stephen_ws/src/stephen/data/maps/${1}/"; then
+    echo 'scp failed'
+    return 1
+fi
 
 echo "$1 map fetched"

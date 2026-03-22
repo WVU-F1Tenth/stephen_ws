@@ -27,20 +27,24 @@ if [[ -z "$1" ]]; then
     return 1
 fi
 
-if [[ ! -d "$HOME/stephen_ws/src/data/maps/${1}/" ]]; then
+if [[ ! -d "$HOME/stephen_ws/src/stephen/data/maps/${1}/" ]]; then
     echo "${1} directory not found in maps"
     return 1
 fi
 
 # Try to fetch raceline if it's not in data/maps
-if [[ ! -f "$HOME/stephen_ws/src/data/maps/${1}/${1}_raceline.csv" ]]; then
+if [[ ! -f "$HOME/stephen_ws/src/stephen/data/maps/${1}/${1}_raceline.csv" ]]; then
     source "$HOME/stephen_ws/scripts/fetch_raceline.sh" "${1}" || return 1
 fi
 
 echo 'Pushing map to car...'
 
 # Push map to car
-scp -r "$HOME/stephen_ws/src/data/maps/${1}" \
-    "${CAR_USER}@${CAR_IP}:/home/${CAR_USER}/stephen_ws/src/data/maps/"
+if ! scp -r \
+    "$HOME/stephen_ws/src/data/maps/${1}" \
+    "${CAR_USER}@${CAR_IP}:/home/${CAR_USER}/stephen_ws/src/stephen/data/maps/"; then
+    echo 'scp failed'
+    return 1
+fi
 
 echo "$1 pushed to maps"

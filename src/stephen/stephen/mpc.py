@@ -260,6 +260,7 @@ class MPC(Node):
         ref_traj[3, 0] = cyaw[ind]
 
         # based on current velocity, distance traveled on the ref line between time steps
+        # TODO use better velocity approximation
         travel = abs(state.v) * self.config.DTK
         # Distance in index count
         dind = travel / self.config.dlk
@@ -272,7 +273,8 @@ class MPC(Node):
         ref_traj[0, :] = cx[ind_list]
         ref_traj[1, :] = cy[ind_list]
         ref_traj[2, :] = sp[ind_list]
-        # Anywere | yaw - course_yaw | > 4.5, shift by 2pi 
+        # Anywere | yaw - course_yaw | > 4.5, shift by 2pi
+        # TODO switch to wrapping at pi instead of 4.5
         cyaw[cyaw - state.yaw > 4.5] = np.abs(
             cyaw[cyaw - state.yaw > 4.5] - (2 * np.pi)
         )

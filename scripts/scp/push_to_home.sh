@@ -35,7 +35,11 @@ fi
 echo 'Pushing to car...'
 
 # Push map to car
-scp -r "$1" \
-    "${CAR_USER}@${CAR_IP}:/home/${CAR_USER}/"
+if ! scp -r \
+    "$1" \
+    "${CAR_USER}@${CAR_IP}:/home/${CAR_USER}/"; then
+    echo 'scp failed'
+    return 1
+fi
 
 echo "$1 pushed to \$HOME"
