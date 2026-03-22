@@ -27,15 +27,15 @@ if [[ -z "$1" ]]; then
     return 1
 fi
 
-if [[ ! -d "$HOME/stephen_ws/src/data/maps/${1}" ]]; then
-    mkdir "$HOME/stephen_ws/src/data/maps/${1}"
+if [[ ! -d "$HOME/stephen_ws/src/stephen/data/maps/${1}" ]]; then
+    mkdir "$HOME/stephen_ws/src/stephen/data/maps/${1}"
 fi
 
 echo 'Fetching map from car...'
 
 # Copy map from car
-scp "${CAR_USER}@${CAR_IP}:/home/${CAR_USER}/sim_ws/maps/${1}_map.pgm" \
-    "${CAR_USER}@${CAR_IP}:/home/${CAR_USER}/sim_ws/maps/${1}_map.yaml" \
-    "$HOME/stephen_ws/src/data/maps/${1}/"
+scp "${CAR_USER}@${CAR_IP}:/home/${CAR_USER}/sim_ws/maps/${1}.pgm" \
+    "${CAR_USER}@${CAR_IP}:/home/${CAR_USER}/sim_ws/maps/${1}.yaml" \
+    "$HOME/stephen_ws/src/stephen/data/maps/${1}/"
 
 echo "$1 map fetched"
