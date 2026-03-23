@@ -18,10 +18,12 @@ if [[ -z "$CAR_IP" ]]; then
     echo 'CAR_IP not set'
     return 1
 fi
+
 if [[ -z "$CAR_USER" ]]; then
     echo 'CAR_USER not set'
     return 1
 fi
+
 if [[ -z "$1" ]]; then
     echo 'Usage: source push_to_home.sh <file-name>'
     return 1

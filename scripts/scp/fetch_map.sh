@@ -18,28 +18,35 @@ if [[ -z "$CAR_IP" ]]; then
     echo 'CAR_IP not set'
     return 1
 fi
+
 if [[ -z "$CAR_USER" ]]; then
     echo 'CAR_USER not set'
     return 1
 fi
+
 if [[ -z "$1" ]]; then
     echo 'Usage: source set_map.sh <map-name>'
     return 1
 fi
 
 if [[ ! -d "$HOME/stephen_ws/src/stephen/data/maps/${1}" ]]; then
-    mkdir "$HOME/stephen_ws/src/stephen/data/maps/${1}"
+    mkdir "$HOME/stephen_ws/src/stephen/data/maps/${1}" || return 1
 fi
 
 echo 'Fetching map from car...'
+
+MAP_DIR="$HOME/stephen_ws/src/stephen/data/maps/${1}/"
 
 # Copy map from car
 if ! scp \
     "${CAR_USER}@${CAR_IP}:/home/${CAR_USER}/sim_ws/maps/${1}.pgm" \
     "${CAR_USER}@${CAR_IP}:/home/${CAR_USER}/sim_ws/maps/${1}.yaml" \
-    "$HOME/stephen_ws/src/stephen/data/maps/${1}/"; then
+    "$MAP_DIR"; then
     echo 'scp failed'
     return 1
 fi
+
+mv "$MAP_DIR/${1}.pgm" "$MAP_DIR/${1}_map.pgm"
+mv "$MAP_DIR/${1}.yaml" "$MAP_DIR/${1}_map.yaml"
 
 echo "$1 map fetched"

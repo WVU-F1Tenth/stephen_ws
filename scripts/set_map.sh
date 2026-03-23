@@ -38,7 +38,7 @@ sed -i \
 -e "\$a export MAP_PATH=\"$MAP_PATH\"" \
 "$HOME/.bashrc"
 
-# Edit yaml file to accomodate _map naming
+# Edit map yaml file to accomodate _map naming
 sed -Ei "s#(^[[:space:]]*)image:.*(\.png|\.pgm)'?#\1image: '${1}_map\2'#" \
     "${MAP_PATH}_map.yaml"
 
@@ -47,21 +47,26 @@ sed -Ei "s|(^[[:space:]]*)map_path:.*|\1map_path: '${MAP_PATH}_map'|" \
     "$HOME/sim_ws/src/f1tenth_gym_ros/config/sim.yaml"
 
 # Clean map
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-python "$SCRIPT_DIR/verify_map.py"
+if [[ -f ${MAP_PATH}_map.png ]]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    python "$SCRIPT_DIR/verify_map.py" || return 1
+fi
 
 # Add to particle filter maps
 PF_MAPS="$HOME/sim_ws/src/particle_filter/maps/"
 if [ -d "$PF_MAPS" ]; then
-    cp "${MAP_PATH}_map.png" "$PF_MAPS" 2>/dev/null || cp "${MAP_PATH}_map.pgm" "$PF_MAPS"
+    # cp "${MAP_PATH}_map.png" "$PF_MAPS" 2>/dev/null || cp "${MAP_PATH}_map.pgm" "$PF_MAPS"
+    cp "${MAP_PATH}_map.pgm" "$PF_MAPS"
     cp "${MAP_PATH}_map.yaml" "$PF_MAPS"
-    echo "Copied map to particle filter"
+    echo "Copied pgm map to particle filter"
 fi
 
 # Add to raceline maps
 RL_MAPS="$HOME/Raceline-Optimization/maps"
 if [ -d "$RL_MAPS" ]; then
-    cp "${MAP_PATH}_map.png" "$RL_MAPS" 2>/dev/null || cp "${MAP_PATH}_map.pgm" "$RL_MAPS"
-    cp "${MAP_PATH}_map.yaml" "$RL_MAPS"
+    cp "${MAP_PATH}_map.png" "$RL_MAPS/$1.png" 2>/dev/null || cp "${MAP_PATH}_map.pgm" "$RL_MAPS/$1.pgm"
+    cp "${MAP_PATH}_map.yaml" "$RL_MAPS/$1.yaml"
     echo "Copied map to raceline"
 fi
+
+echo 'Map set'

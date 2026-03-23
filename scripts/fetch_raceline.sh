@@ -19,7 +19,7 @@ fi
 
 RACELINE_DEST="${MAP_PATH}_raceline.csv"
 
-RACELINE_SRC="$HOME/Raceline-Optimization/outputs/$1_map/*"
+RACELINE_SRC="$HOME/Raceline-Optimization/outputs/${1}/*"
 RACELINE_SRC=( $RACELINE_SRC )
 if (( ${#RACELINE_SRC[@]} == 0 )); then
     echo 'ERROR: No raceline files found'
