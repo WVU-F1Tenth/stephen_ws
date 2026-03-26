@@ -55,10 +55,13 @@ class PurePursuit(Node):
         self.raceline_viz = self.create_publisher(Marker, '/viz/raceline', 10)
         self.goal_viz = self.create_publisher(Marker, '/viz/goal', 10)
         qos = QoSProfile(
-            depth=10,
+            depth=1,
             reliability=ReliabilityPolicy.BEST_EFFORT
         )
-        self.sub_odom = self.create_subscription(Odometry, '/ego_racecar/odom', self.pose_callback,  qos)
+        if SIMULATOR:
+            self.sub_odom = self.create_subscription(Odometry, '/ego_racecar/odom', self.odom_callback,  qos)
+        else:
+            self.sub_pose = self.create_subscription(PoseStamped, '/pf/viz/inferred_pose', self.pose_callback, 1)
         self.viz_timer = self.create_timer(1.0 / VIZ_RATE, self.publish_markers)
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
@@ -107,25 +110,28 @@ class PurePursuit(Node):
         self.terminal_settings = termios.tcgetattr(self.fd)
         tty.setcbreak(self.fd)
 
-    def pose_callback(self, odometry_info):
-        x_car_odom = odometry_info.pose.pose.position.x
-        y_car_odom = odometry_info.pose.pose.position.y
-        heading_car_odom = self.quaternion_to_heading(odometry_info.pose.pose.orientation)
+    def odom_callback(self, odometry_info: Odometry):
+        self.pose_callback(odometry_info.pose.pose)
 
-        if SIMULATOR:
-            x_car_map, y_car_map = x_car_odom, y_car_odom
-            heading_car_map = heading_car_odom
-        else:
-            point_car_map = self.transform(
-                'odom',
-                'map',
-                x_car_odom,
-                y_car_odom,
-                heading_car_odom
-                )
-            if point_car_map is None:
-                return
-            x_car_map, y_car_map, heading_car_map = point_car_map # type: ignore
+    def pose_callback(self, pose):
+        x_car_map = pose.position.x
+        y_car_map = pose.position.y
+        heading_car_map = self.quaternion_to_heading(pose.orientation)
+
+        # if SIMULATOR:
+        #     x_car_map, y_car_map = x_car_odom, y_car_odom
+        #     heading_car_map = heading_car_odom
+        # else:
+        #     point_car_map = self.transform(
+        #         'odom',
+        #         'map',
+        #         x_car_odom,
+        #         y_car_odom,
+        #         heading_car_odom
+        #         )
+        #     if point_car_map is None:
+        #         return
+        #     x_car_map, y_car_map, heading_car_map = point_car_map # type: ignore
 
         # ===================================================================================
 
@@ -140,15 +146,19 @@ class PurePursuit(Node):
         self.goal_index = np.searchsorted(relative_dists, params.lookahead.v) % d.size
 
         # Transform goal point to vehicle frame of reference
-        point_goal_car = self.transform(
-            'map', 
-            'ego_racecar/base_link', 
+        x_goal_car, y_goal_car = self.map_to_car_point(
+            pose, 
             self.waypoints_x[self.goal_index], 
-            self.waypoints_y[self.goal_index],
-            0.0)
-        if point_goal_car is None:
-            return
-        x_goal_car, y_goal_car, heading_goal_car = point_goal_car # type: ignore
+            self.waypoints_y[self.goal_index])
+        # point_goal_car = self.transform(
+        #     'map', 
+        #     'ego_racecar/base_link', 
+        #     self.waypoints_x[self.goal_index], 
+        #     self.waypoints_y[self.goal_index],
+        #     0.0)
+        # if point_goal_car is None:
+        #     return
+        # x_goal_car, y_goal_car, heading_goal_car = point_goal_car # type: ignore
 
         # Calculate curvature/steering angle
         L = np.hypot(x_goal_car, y_goal_car)
@@ -211,10 +221,18 @@ class PurePursuit(Node):
         ackermann_drive_result.header.stamp = self.get_clock().now().to_msg()
         ackermann_drive_result.drive.steering_angle = self.angle
         ackermann_drive_result.drive.speed = self.speed
-        acc = 0.0 if params.accleration.v < 0.05 else params.acceleration.v
+        acc = 0.0 if params.acceleration.v < 0.05 else params.acceleration.v
         ackermann_drive_result.drive.acceleration = acc
         self.pub_drive.publish(ackermann_drive_result)
 
+    def map_to_car_point(self, car_pose, map_x, map_y):
+        dx = map_x - car_pose.position.x
+        dy = map_y - car_pose.position.y
+        theta = self.quaternion_to_heading(car_pose.orientation)
+        x_car =  math.cos(theta) * dx + math.sin(theta) * dy
+        y_car = -math.sin(theta) * dx + math.cos(theta) * dy
+        return x_car, y_car
+    
     def transform(self, from_frame, to_frame, x_from, y_from, yaw):
         try:
             p1 = PoseStamped()

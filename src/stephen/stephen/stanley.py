@@ -58,10 +58,13 @@ class Stanley(Node):
         self.raceline_viz = self.create_publisher(Marker, '/viz/raceline', 10)
         self.goal_viz = self.create_publisher(Marker, '/viz/goal', 10)
         qos = QoSProfile(
-            depth=10,
+            depth=1,
             reliability=ReliabilityPolicy.BEST_EFFORT
         )
-        self.sub_odom = self.create_subscription(Odometry, '/ego_racecar/odom', self.pose_callback,  qos)
+        if SIMULATOR:
+            self.sub_odom = self.create_subscription(Odometry, '/ego_racecar/odom', self.odom_callback,  qos)
+        else:
+            self.sub_pose = self.create_subscription(PoseStamped, '/pf/viz/inferred_pose', self.pose_callback, 1)
         self.viz_timer = self.create_timer(1.0 / VIZ_RATE, self.publish_markers)
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
@@ -109,25 +112,28 @@ class Stanley(Node):
         self.terminal_settings = termios.tcgetattr(self.fd)
         tty.setcbreak(self.fd)
 
-    def pose_callback(self, odometry_info):
-        x_car_odom = odometry_info.pose.pose.position.x
-        y_car_odom = odometry_info.pose.pose.position.y
-        heading_car_odom = self.quaternion_to_heading(odometry_info.pose.pose.orientation)
+    def odom_callback(self, odometry_info: Odometry):
+        self.pose_callback(odometry_info.pose.pose)
 
-        if SIMULATOR:
-            x_car_map, y_car_map = x_car_odom, y_car_odom
-            heading_car_map = heading_car_odom
-        else:
-            point_car_map = self.transform(
-                'odom',
-                'map',
-                x_car_odom,
-                y_car_odom,
-                heading_car_odom
-                )
-            if point_car_map is None:
-                return
-            x_car_map, y_car_map, heading_car_map = point_car_map # type: ignore
+    def pose_callback(self, pose):
+        x_car_map = pose.position.x
+        y_car_map = pose.position.y
+        heading_car_map = self.quaternion_to_heading(pose.orientation)
+
+        # if SIMULATOR:
+        #     x_car_map, y_car_map = x_car_odom, y_car_odom
+        #     heading_car_map = heading_car_odom
+        # else:
+        #     point_car_map = self.transform(
+        #         'odom',
+        #         'map',
+        #         x_car_odom,
+        #         y_car_odom,
+        #         heading_car_odom
+        #         )
+        #     if point_car_map is None:
+        #         return
+        #     x_car_map, y_car_map, heading_car_map = point_car_map # type: ignore
 
         # ===================================================================================
 
@@ -156,8 +162,8 @@ class Stanley(Node):
 
         # yaw_damping = 
 
-        angle_diff = heading_car_map - heading_goal_map
-        heading_error = math.atan2(math.cos(angle_diff), math.sin(angle_diff))
+        angle_diff = -(heading_car_map - heading_goal_map)
+        heading_error = math.atan2(math.sin(angle_diff), math.cos(angle_diff))
         heading_term = params.k_heading.v * heading_error
 
         crosstrack_error = ((x_car_map - x_goal_map) * math.sin(heading_car_map) - 
@@ -244,6 +250,14 @@ class Stanley(Node):
         except tf2_ros.TransformException as e: # type: ignore
             self.get_logger().warn(f"TF unavailable: {e}")
             return None
+        
+    def map_to_car_point(self, car_pose, map_x, map_y):
+        dx = map_x - car_pose.position.x
+        dy = map_y - car_pose.position.y
+        theta = self.quaternion_to_heading(car_pose.orientation)
+        x_car =  math.cos(theta) * dx + math.sin(theta) * dy
+        y_car = -math.sin(theta) * dx + math.cos(theta) * dy
+        return x_car, y_car
         
     def quaternion_to_heading(self, q):
         siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)

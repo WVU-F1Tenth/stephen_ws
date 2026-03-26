@@ -41,7 +41,7 @@ echo 'Pushing map to car...'
 
 # Push map to car
 if ! scp -r \
-    "$HOME/stephen_ws/src/data/maps/${1}" \
+    "$HOME/stephen_ws/src/stephen/data/maps/${1}" \
     "${CAR_USER}@${CAR_IP}:/home/${CAR_USER}/stephen_ws/src/stephen/data/maps/"; then
     echo 'scp failed'
     return 1
