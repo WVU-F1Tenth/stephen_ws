@@ -113,9 +113,10 @@ class Stanley(Node):
         tty.setcbreak(self.fd)
 
     def odom_callback(self, odometry_info: Odometry):
-        self.pose_callback(odometry_info.pose.pose)
+        self.pose_callback(odometry_info.pose)
 
-    def pose_callback(self, pose):
+    def pose_callback(self, pose_stamped):
+        pose = pose_stamped.pose
         x_car_map = pose.position.x
         y_car_map = pose.position.y
         heading_car_map = self.quaternion_to_heading(pose.orientation)
@@ -162,8 +163,8 @@ class Stanley(Node):
 
         # yaw_damping = 
 
-        angle_diff = -(heading_car_map - heading_goal_map)
-        heading_error = math.atan2(math.sin(angle_diff), math.cos(angle_diff))
+        angle_diff = (heading_car_map - heading_goal_map)
+        heading_error = math.atan2(math.cos(angle_diff), math.sin(angle_diff))
         heading_term = params.k_heading.v * heading_error
 
         crosstrack_error = ((x_car_map - x_goal_map) * math.sin(heading_car_map) - 

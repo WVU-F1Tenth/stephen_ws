@@ -111,9 +111,10 @@ class PurePursuit(Node):
         tty.setcbreak(self.fd)
 
     def odom_callback(self, odometry_info: Odometry):
-        self.pose_callback(odometry_info.pose.pose)
+        self.pose_callback(odometry_info.pose)
 
-    def pose_callback(self, pose):
+    def pose_callback(self, pose_stamped):
+        pose = pose_stamped.pose
         x_car_map = pose.position.x
         y_car_map = pose.position.y
         heading_car_map = self.quaternion_to_heading(pose.orientation)

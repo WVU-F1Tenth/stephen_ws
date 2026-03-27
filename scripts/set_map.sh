@@ -55,13 +55,18 @@ fi
 # Add to particle filter maps
 PF_MAPS="$HOME/sim_ws/src/particle_filter/maps/"
 if [ -d "$PF_MAPS" ]; then
-    # cp "${MAP_PATH}_map.png" "$PF_MAPS" 2>/dev/null || cp "${MAP_PATH}_map.pgm" "$PF_MAPS"
+    # Copy map to pf maps
     cp "${MAP_PATH}_map.pgm" "$PF_MAPS/$1.pgm"
     cp "${MAP_PATH}_map.yaml" "$PF_MAPS/$1.yaml"
     echo "Copied pgm map to particle filter"
+    # Edit localize.yaml map name
     sed -Ei "s|(^[[:space:]]*)map:.*|\1map: '${1}'|" \
     "$HOME/sim_ws/src/particle_filter/config/localize.yaml"
-    echo "Updated particle filtler yaml"
+    echo "Updated pf localize yaml"
+    # Edit map yaml map image name
+    sed -Ei "s|(^[[:space:]]*)map_path:.*|\1map_path: '${1}.pgm'|" \
+    "$HOME/sim_ws/src/particle_filter/maps/${1}.yaml"
+    echo "Updated pf map yaml"
 fi
 
 # Add to raceline maps
