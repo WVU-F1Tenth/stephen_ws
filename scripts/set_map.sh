@@ -32,49 +32,64 @@ if [[ ! -f "${MAP_PATH}_map.yaml" ]]; then
 fi
 
 # Write MAP_PATH export to .bashrc
-echo "Writing to .bashrc"
 sed -i \
--e "/^export MAP_PATH=.*/d" \
--e "\$a export MAP_PATH=\"$MAP_PATH\"" \
-"$HOME/.bashrc"
+    -e "/^export MAP_PATH=.*/d" \
+    -e "\$a export MAP_PATH=\"$MAP_PATH\"" \
+    "$HOME/.bashrc" ||
+    echo "Error: Failed to edit .bashrc"
 
 # Edit map yaml file to accomodate _map naming
 sed -Ei "s#(^[[:space:]]*)image:.*(\.png|\.pgm)'?#\1image: '${1}_map\2'#" \
-    "${MAP_PATH}_map.yaml"
+    "${MAP_PATH}_map.yaml" || {
+    echo "Error: Failed to update map yaml"
+    return 1
+    }
 
 # Edit sim_ws yaml
-sed -Ei "s|(^[[:space:]]*)map_path:.*|\1map_path: '${MAP_PATH}_map'|" \
-    "$HOME/sim_ws/src/f1tenth_gym_ros/config/sim.yaml"
+if [[ -f "$HOME/sim_ws/src/f1tenth_gym_ros/config/sim.yaml" ]]; then
+    sed -Ei "s|(^[[:space:]]*)map_path:.*|\1map_path: '${MAP_PATH}_map'|" \
+        "$HOME/sim_ws/src/f1tenth_gym_ros/config/sim.yaml" ||
+        echo "Error: Failed to update sim yaml"
+    echo "Sim set"
+fi
 
 # Clean map
 if [[ -f ${MAP_PATH}_map.png ]]; then
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    python "$SCRIPT_DIR/verify_map.py" || return 1
+    python "$SCRIPT_DIR/verify_map.py" || {
+        echo "Error: Failed to clean map"
+        return 1
+    }
 fi
 
 # Add to particle filter maps
-PF_MAPS="$HOME/sim_ws/src/particle_filter/maps/"
+PF_MAPS="$HOME/sim_ws/src/particle_filter/maps"
 if [ -d "$PF_MAPS" ]; then
     # Copy map to pf maps
-    cp "${MAP_PATH}_map.pgm" "$PF_MAPS/$1.pgm"
-    cp "${MAP_PATH}_map.yaml" "$PF_MAPS/$1.yaml"
-    echo "Copied pgm map to particle filter"
+    cp "${MAP_PATH}_map.pgm" "$PF_MAPS/$1.pgm" ||
+        echo "Error: Failed to copy pgm map to pf maps"
+    cp "${MAP_PATH}_map.yaml" "$PF_MAPS/$1.yaml" ||
+        echo "Error: Failed to copy map yaml to pf maps"
     # Edit localize.yaml map name
-    sed -Ei "s|(^[[:space:]]*)map:.*|\1map: '${1}'|" \
-    "$HOME/sim_ws/src/particle_filter/config/localize.yaml"
-    echo "Updated pf localize yaml"
+    sed -Ei "s|(^[[:space:]]*)map:.*|\1map: '$1'|" \
+    "$HOME/sim_ws/src/particle_filter/config/localize.yaml" ||
+        echo "Error: Failed to update pf localize.yaml"
     # Edit map yaml map image name
-    sed -Ei "s|(^[[:space:]]*)map_path:.*|\1map_path: '${1}.pgm'|" \
-    "$HOME/sim_ws/src/particle_filter/maps/${1}.yaml"
-    echo "Updated pf map yaml"
+    sed -Ei "s|(^[[:space:]]*)map_path:.*|\1map_path: '$1.pgm'|" \
+        "$PF_MAPS/$1.yaml" ||
+        echo "Error: Failed to update pf map yaml"
+    echo 'Particle filter set'
 fi
 
 # Add to raceline maps
 RL_MAPS="$HOME/Raceline-Optimization/maps"
 if [ -d "$RL_MAPS" ]; then
-    cp "${MAP_PATH}_map.png" "$RL_MAPS/$1.png" 2>/dev/null || cp "${MAP_PATH}_map.pgm" "$RL_MAPS/$1.pgm"
-    cp "${MAP_PATH}_map.yaml" "$RL_MAPS/$1.yaml"
-    echo "Copied map to raceline"
+    cp "${MAP_PATH}_map.png" "$RL_MAPS/$1.png" 2>/dev/null ||
+        cp "${MAP_PATH}_map.pgm" "$RL_MAPS/$1.pgm" ||
+        echo "Error: Failed to copy map image to RL maps"
+    cp "${MAP_PATH}_map.yaml" "$RL_MAPS/$1.yaml" ||
+        echo "Error: Failed to copy map yaml to RL maps"
+    echo "Raceline optimization set"
 fi
 
 echo 'Map set'

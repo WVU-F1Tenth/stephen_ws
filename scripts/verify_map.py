@@ -106,10 +106,10 @@ def verify_and_fix_map(map_name):
         
         # Save fixed version if needed
         if issues:
-            # Backup original if not already done
-            if not os.path.exists(backup_file):
-                img.save(backup_file)
-                print(f"\n💾 Backed up original to: {backup_file}")
+            # # Backup original if not already done
+            # if not os.path.exists(backup_file):
+            #     img.save(backup_file)
+            #     print(f"\n💾 Backed up original to: {backup_file}")
             
             # Save fixed version
             fixed_img = Image.fromarray(img_array, mode='L')  # 'L' = grayscale

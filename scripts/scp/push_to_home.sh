@@ -29,9 +29,10 @@ if [[ -z "$1" ]]; then
     return 1
 fi
 
-read -p "Are you sure you want to push $1 y/n" response
+read -p "Are you sure you want to push $1 y/n: " response
 if [[ $response != 'y' ]]; then
     echo 'Cancelling...'
+    return 1
 fi
 
 echo 'Pushing to car...'

@@ -30,6 +30,9 @@ elif (( ${#RACELINE_SRC[@]} > 1 )); then
 fi
 RACELINE_SRC=${RACELINE_SRC[0]}
 
-cp "$RACELINE_SRC" "$RACELINE_DEST"
+cp "$RACELINE_SRC" "$RACELINE_DEST" || {
+    echo "Error: failed to fetch raceline"
+    return 1
+    }
 
-
+echo "Raceline fetched"
