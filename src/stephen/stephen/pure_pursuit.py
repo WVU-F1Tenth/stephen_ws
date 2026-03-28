@@ -2,7 +2,7 @@
 import rclpy
 from rclpy.node import Node
 from ackermann_msgs.msg import AckermannDriveStamped
-from geometry_msgs.msg import Point, PointStamped, PoseStamped, Quaternion
+from geometry_msgs.msg import Point, PoseStamped, Quaternion
 from nav_msgs.msg import Odometry
 from visualization_msgs.msg import Marker
 import numpy as np
@@ -12,7 +12,6 @@ from rclpy.duration import Duration
 from rclpy.time import Time
 from typing import Tuple
 from pathlib import Path
-import tf2_geometry_msgs
 import math
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 import os
@@ -37,14 +36,15 @@ VIZ_RATE = 5.0
 
 # Used to bind scalars to keys were lowercase increments 0.1 and uppercase increment 1.0
 params = SimpleNamespace(
-    speed=SimpleNamespace(v=0.0, keys=('s', 'd')),
-    lookahead=SimpleNamespace(v=0.8, keys=('a', 'f')),
-    acceleration=SimpleNamespace(v=0.0, keys=('j', 'k')),
-    use_v=SimpleNamespace(v=False, keys=None),
-    key_msg=SimpleNamespace(
-        v='Commands(space=stop, speed=sd, lookahead=af, acceleration=jk)',
-        keys=None),
-    )
+    speed=SimpleNamespace(v=0.0, key='s', name='speed'),
+    lookahead=SimpleNamespace(v=0.8, key='l', name='lookahead'),
+    acceleration=SimpleNamespace(v=0.0, key='a', name='acceleration'),
+    curvature_lookahead=SimpleNamespace(v=0.1, key='c', name='curvature lookahead'),
+    velocities_coeff=SimpleNamespace(v=0.1, key='v', name='velocity coefficient'),
+    velocities_mode=SimpleNamespace(v=False, key=None),
+    curvature_lookahead_mode=SimpleNamespace(v=False, key=None),
+)
+SELECTED = params.speed
 
 class PurePursuit(Node):
     def __init__(self):
@@ -105,7 +105,11 @@ class PurePursuit(Node):
         self.dists = np.hypot(np.diff(self.waypoints_x), np.diff(self.waypoints_y))
         self.dist_sums = np.cumsum(np.append(self.dists, self.dists))
         
-        print(params.key_msg.v)
+        # Print key bindings
+        command_bindings = '\n'.join(
+            [f'  {param.key}={param.name}' for param in vars(params).values() if param.key])
+        print(f'Commands:\n  space = stop\n{command_bindings}')
+
         self.fd = sys.stdin.fileno()
         self.terminal_settings = termios.tcgetattr(self.fd)
         tty.setcbreak(self.fd)
@@ -118,21 +122,7 @@ class PurePursuit(Node):
         x_car_map = pose.position.x
         y_car_map = pose.position.y
         heading_car_map = self.quaternion_to_heading(pose.orientation)
-
-        # if SIMULATOR:
-        #     x_car_map, y_car_map = x_car_odom, y_car_odom
-        #     heading_car_map = heading_car_odom
-        # else:
-        #     point_car_map = self.transform(
-        #         'odom',
-        #         'map',
-        #         x_car_odom,
-        #         y_car_odom,
-        #         heading_car_odom
-        #         )
-        #     if point_car_map is None:
-        #         return
-        #     x_car_map, y_car_map, heading_car_map = point_car_map # type: ignore
+        lookahead = params.lookahead.v
 
         # ===================================================================================
 
@@ -144,22 +134,13 @@ class PurePursuit(Node):
         
         # Find goal point (arc length lookahead)
         relative_dists = self.dist_sums - self.dist_sums[self.nearest_index]
-        self.goal_index = np.searchsorted(relative_dists, params.lookahead.v) % d.size
+        self.goal_index = np.searchsorted(relative_dists, lookahead) % d.size
 
         # Transform goal point to vehicle frame of reference
         x_goal_car, y_goal_car = self.map_to_car_point(
             pose, 
             self.waypoints_x[self.goal_index], 
             self.waypoints_y[self.goal_index])
-        # point_goal_car = self.transform(
-        #     'map', 
-        #     'ego_racecar/base_link', 
-        #     self.waypoints_x[self.goal_index], 
-        #     self.waypoints_y[self.goal_index],
-        #     0.0)
-        # if point_goal_car is None:
-        #     return
-        # x_goal_car, y_goal_car, heading_goal_car = point_goal_car # type: ignore
 
         # Calculate curvature/steering angle
         L = np.hypot(x_goal_car, y_goal_car)
@@ -209,13 +190,10 @@ class PurePursuit(Node):
         self.goal_viz.publish(goal_marker)
 
     def get_speed(self):
-        coeff = params.speed.v
-        if params.use_v.v == True:
-            # Safety
-            coeff = min(coeff, 1.2)
-            return coeff * self.velocities[self.goal_index]
+        if params.velocities_mode.v:
+            return params.velocities_coeff.v * self.velocities[self.goal_index]
         else:
-            return coeff
+            return params.speed.v
 
     def publish_drive(self):
         ackermann_drive_result = AckermannDriveStamped()
@@ -234,29 +212,6 @@ class PurePursuit(Node):
         y_car = -math.sin(theta) * dx + math.cos(theta) * dy
         return x_car, y_car
     
-    def transform(self, from_frame, to_frame, x_from, y_from, yaw):
-        try:
-            p1 = PoseStamped()
-            p1.header.frame_id = from_frame
-            p1.header.stamp = Time().to_msg()
-            p1.pose.position.x = float(x_from)
-            p1.pose.position.y = float(y_from)
-            p1.pose.position.z = 0.0
-            quat = self.heading_to_quaternion(yaw)
-            p1.pose.orientation.z = quat.z
-            p1.pose.orientation.w = quat.w
-            p2 = self.tf_buffer.transform(
-                p1,
-                to_frame,
-                timeout=Duration(seconds=0.05), # type: ignore
-            )
-            heading = self.quaternion_to_heading(p2.pose.orientation)
-            x, y = p2.pose.position.x, p2.pose.position.y
-            return x, y, heading
-        except tf2_ros.TransformException as e: # type: ignore
-            self.get_logger().warn(f"TF unavailable: {e}")
-            return None
-        
     def quaternion_to_heading(self, q):
         siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
         cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
@@ -274,39 +229,43 @@ class PurePursuit(Node):
         return math.atan2(math.sin(angle), math.cos(angle))
 
     def check_input(self):
-        global params
+        global params, SELECTED
         key = self.get_key()
         if not key:
             return
         if key == ' ':
             params.speed.v = 0.0
+            params.velocities_coeff.v = 0.0
             print('stopped')
-        elif key == 'v':
-            if params.use_v.v == False:
-                params.use_v.v = True
-                print('Velocities Mode (speed is coeff)')
-            else:
-                params.use_v.v = False
-                print('Manual Speed')
-            params.speed.v = 0.0
-            print('speed = 0.0')
+        elif key in ('i', 'o', 'j', 'k', 'n', 'm'):
+            if key == 'i':
+                SELECTED.v -= 1.0
+            elif key == 'o':
+                SELECTED.v += 1.0
+            elif key == 'j':
+                SELECTED.v -= 0.1
+            elif key == 'k':
+                SELECTED.v += 0.1
+            elif key == 'n':
+                SELECTED.v -= 0.01
+            elif key == 'm':
+                SELECTED.v += 0.01
+            print(f'{SELECTED.name} = {SELECTED.v:.2f}')
         else:
-            for name, d in vars(params).items():
-                if d.keys is None:
-                    continue
-                k1, k2 = d.keys
-                if key == k1:
-                    d.v -= 0.1
-                elif key == k1.upper():
-                    d.v -= 1.0
-                elif key == k2:
-                    d.v += 0.1
-                elif key == k2.upper():
-                    d.v += 1.0
-                else:
-                    continue
-                print(f'{name} = {d.v:.1f}')
-                break
+            for param in vars(params).values():
+                if key == param.key:
+                    if isinstance(param.v, float):
+                        SELECTED = param
+                        print(f'{param.name} selected')
+                        break
+                    elif isinstance(param.v, bool):
+                        param.v = not param.v
+            if key == 'v':
+                print('Velocities Mode')
+                params.velocities_mode.v = True
+            elif key == 's':
+                print('Manual Speed')
+                params.velocities_mode.v = False
 
     def get_key(self):
         rlist, _, _ = select.select([sys.stdin], [], [], 0.005)

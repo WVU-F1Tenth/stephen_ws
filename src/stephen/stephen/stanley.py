@@ -2,7 +2,7 @@
 import rclpy
 from rclpy.node import Node
 from ackermann_msgs.msg import AckermannDriveStamped
-from geometry_msgs.msg import Point, PointStamped, PoseStamped, Quaternion
+from geometry_msgs.msg import Point, PoseStamped, Quaternion
 from nav_msgs.msg import Odometry
 from visualization_msgs.msg import Marker
 import numpy as np
@@ -12,7 +12,6 @@ from rclpy.duration import Duration
 from rclpy.time import Time
 from typing import Tuple
 from pathlib import Path
-import tf2_geometry_msgs
 import math
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 import os
@@ -35,19 +34,20 @@ WHEELBASE = 0.33
 MAX_STEER = 0.38
 VIZ_RATE = 5.0
 
-# Used to bind scalars to keys were lowercase increments 0.1 and uppercase increment 1.0
+# Numeric parameters adjustable by keyboard
 params = SimpleNamespace(
-    speed=SimpleNamespace(v=0.0, keys=('s', 'd')),
-    lookahead=SimpleNamespace(v=0.3, keys=('a', 'f')),
-    k_error=SimpleNamespace(v=1.0, keys=('j', 'k')), # Cross-track error gain - main error
-    k_heading=SimpleNamespace(v=0.5, keys=('h', 'l')), # Heading gain - helps smooth higher speeds
-    k_softening=SimpleNamespace(v=1.0, keys=None), # Softening contant - helps smooth low speeds
-    k_damping=SimpleNamespace(v=0.0, keys=None), # Alternative to heading gain - helps smooth high speeds
-    use_v=SimpleNamespace(v=False, keys=None),
-    key_msg=SimpleNamespace(
-        v='Commands(space=stop, sd=speed, lookahead=af, jk=k_error, hl=k_heading)',
-        keys=None),
-)
+    speed=SimpleNamespace(v=0.0, key='s', name='speed'),
+    lookahead=SimpleNamespace(v=0.05, key='l', name='lookahead'), # proportional ~ 0.05
+    acceleration=SimpleNamespace(v=0.0, key='a', name='acceleration'),
+    velocities_coeff=SimpleNamespace(v=0.0, key='v', name='velocities coefficient'),
+    k_error=SimpleNamespace(v=1.0, key='e', name='cross-track error gain'),
+    k_heading=SimpleNamespace(v=1.0, key='h', name='heading error gain'),
+    k_softening=SimpleNamespace(v=0.0, key=None),
+    k_damping=SimpleNamespace(v=0.0, key=None),
+    velocities_mode=SimpleNamespace(v=False, key=None),
+    proportional_lookahead=SimpleNamespace(v=False, key='p', name='velocity proportional lookahead')
+    )
+SELECTED = params.speed
 
 class Stanley(Node):
     def __init__(self):
@@ -107,7 +107,11 @@ class Stanley(Node):
         self.dists = np.hypot(np.diff(self.waypoints_x), np.diff(self.waypoints_y))
         self.dist_sums = np.cumsum(np.append(self.dists, self.dists))
         
-        print(params.key_msg.v)
+        # Print key bindings
+        command_bindings = '\n'.join(
+            [f'  {param.key} = {param.name}' for param in vars(params).values() if param.key])
+        print(f'Commands:\n  space = stop\n{command_bindings}')
+
         self.fd = sys.stdin.fileno()
         self.terminal_settings = termios.tcgetattr(self.fd)
         tty.setcbreak(self.fd)
@@ -120,23 +124,9 @@ class Stanley(Node):
         x_car_map = pose.position.x
         y_car_map = pose.position.y
         heading_car_map = self.quaternion_to_heading(pose.orientation)
-
-        # if SIMULATOR:
-        #     x_car_map, y_car_map = x_car_odom, y_car_odom
-        #     heading_car_map = heading_car_odom
-        # else:
-        #     point_car_map = self.transform(
-        #         'odom',
-        #         'map',
-        #         x_car_odom,
-        #         y_car_odom,
-        #         heading_car_odom
-        #         )
-        #     if point_car_map is None:
-        #         return
-        #     x_car_map, y_car_map, heading_car_map = point_car_map # type: ignore
-
-        # ===================================================================================
+        lookahead = (params.lookahead.v * self.speed 
+                     if params.proportional_lookahead.v
+                     else params.lookahead.v)
 
         # Project to front axle
         x_car_map = x_car_map + WHEELBASE * math.cos(heading_car_map)
@@ -150,7 +140,7 @@ class Stanley(Node):
         
         # Find goal point (arc length lookahead)
         relative_dists = self.dist_sums - self.dist_sums[self.nearest_index]
-        self.goal_index = np.searchsorted(relative_dists, params.lookahead.v) % d.size
+        self.goal_index = np.searchsorted(relative_dists, lookahead) % d.size
         
         # Get goal index params
         goal_index = self.goal_index
@@ -214,44 +204,20 @@ class Stanley(Node):
         self.goal_viz.publish(goal_marker)
 
     def get_speed(self):
-        coeff = params.speed.v
-        if params.use_v.v == True:
-            # Safety
-            coeff = min(coeff, 1.8)
-            return coeff * self.velocities[self.goal_index]
+        if params.velocities_mode.v:
+            return params.velocities_coeff.v * self.velocities[self.goal_index]
         else:
-            return coeff
+            return params.speed.v
         
     def publish_drive(self):
         ackermann_drive_result = AckermannDriveStamped()
         ackermann_drive_result.header.stamp = self.get_clock().now().to_msg()
         ackermann_drive_result.drive.steering_angle = self.angle
         ackermann_drive_result.drive.speed = self.speed
+        acc = 0.0 if params.acceleration.v < 0.05 else params.acceleration.v
+        ackermann_drive_result.drive.acceleration = acc
         self.pub_drive.publish(ackermann_drive_result)
 
-    def transform(self, from_frame, to_frame, x_from, y_from, yaw):
-        try:
-            p1 = PoseStamped()
-            p1.header.frame_id = from_frame
-            p1.header.stamp = Time().to_msg()
-            p1.pose.position.x = float(x_from)
-            p1.pose.position.y = float(y_from)
-            p1.pose.position.z = 0.0
-            quat = self.heading_to_quaternion(yaw)
-            p1.pose.orientation.z = quat.z
-            p1.pose.orientation.w = quat.w
-            p2 = self.tf_buffer.transform(
-                p1,
-                to_frame,
-                timeout=Duration(seconds=0.05), # type: ignore
-            )
-            heading = self.quaternion_to_heading(p2.pose.orientation)
-            x, y = p2.pose.position.x, p2.pose.position.y
-            return x, y, heading
-        except tf2_ros.TransformException as e: # type: ignore
-            self.get_logger().warn(f"TF unavailable: {e}")
-            return None
-        
     def map_to_car_point(self, car_pose, map_x, map_y):
         dx = map_x - car_pose.position.x
         dy = map_y - car_pose.position.y
@@ -274,40 +240,49 @@ class Stanley(Node):
         return q
     
     def check_input(self):
-        global params
+        global params, SELECTED
         key = self.get_key()
         if not key:
             return
         if key == ' ':
             params.speed.v = 0.0
+            params.velocities_coeff.v = 0.0
             print('stopped')
-        elif key == 'v':
-            if params.use_v.v == False:
-                params.use_v.v = True
-                print('Velocities Mode (speed is coeff)')
-            else:
-                params.use_v.v = False
-                print('Manual Speed')
-            params.speed.v = 0.0
-            print('speed = 0.0')
+        elif key in ('i', 'o', 'j', 'k', 'n', 'm'):
+            if key == 'i':
+                SELECTED.v -= 1.0
+            elif key == 'o':
+                SELECTED.v += 1.0
+            elif key == 'j':
+                SELECTED.v -= 0.1
+            elif key == 'k':
+                SELECTED.v += 0.1
+            elif key == 'n':
+                SELECTED.v -= 0.01
+            elif key == 'm':
+                SELECTED.v += 0.01
+            print(f'{SELECTED.name} = {SELECTED.v:.2f}')
         else:
-            for name, d in vars(params).items():
-                if d.keys is None:
-                    continue
-                k1, k2 = d.keys
-                if key == k1:
-                    d.v -= 0.1
-                elif key == k1.upper():
-                    d.v -= 1.0
-                elif key == k2:
-                    d.v += 0.1
-                elif key == k2.upper():
-                    d.v += 1.0
-                else:
-                    continue
-                print(f'{name} = {d.v:.1f}')
-                break
-
+            for param in vars(params).values():
+                if key == param.key:
+                    if isinstance(param.v, float):
+                        SELECTED = param
+                        print(f'{param.name} selected')
+                        break
+                    elif isinstance(param.v, bool):
+                        if param.v:
+                            param.v = False
+                            print(f'Unset {param.name}')
+                        else:
+                            param.v = True
+                            print(f'Set {param.name}')
+            if key == 'v':
+                print('Velocities Mode')
+                params.velocities_mode.v = True
+            elif key == 's':
+                print('Manual Speed')
+                params.velocities_mode.v = False
+                
     def get_key(self):
         rlist, _, _ = select.select([sys.stdin], [], [], 0.005)
         if rlist:
