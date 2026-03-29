@@ -31,7 +31,7 @@ if not CSV_PATH.exists():
     raise RuntimeError("Waypoint file doesn't exist")
 
 SIMULATOR = True
-
+CCW = True
 WHEELBASE = 0.33
 MAX_STEER = 0.38
 VIZ_RATE = 5.0
@@ -160,19 +160,18 @@ class PurePursuit(Node):
                     index = (nearest + offset) % self.point_count
                     sum += self.abs_weighted_curvatures[index]
                     offset += 1
-                if offset < self.point_count:
-                    self.goal_index = index
-                else:
-                    print('Failed to find curvature lookahead')
-                    self.goal_index = nearest + 10
             elif x == 2:
-                self.goal_index = threshold_index_cumulative(
+                _, offset = threshold_index_cumulative(
                     self.abs_weighted_curvatures, self.nearest_index, params.curvature_lookahead.v)
-                if self.goal_index == self.nearest_index:
-                    print('Failed to find lookahead')
-                    self.goal_index += 10
-
-            # print(f'lookahead time = {perf_counter() - lookahead_starttime:f}')
+            if  self.goal_index == self.nearest_index:
+                print('Failed to find lookahead')
+            max_lookahead = 5.0
+            min_lookahead = 0.5
+            min_offset = min_lookahead / self.raceline_spacing
+            max_offset = max_lookahead / self.raceline_spacing
+            offset = int(np.clip(offset, min_offset, max_offset))
+            self.goal_index = (self.nearest_index + offset) % self.point_count
+            # print(f'{perf_counter() - lookahead_starttime:f}')
         else:
             lookahead = params.lookahead.v
             # Arc length lookahead

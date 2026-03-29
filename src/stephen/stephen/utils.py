@@ -2,7 +2,7 @@ import numpy
 from numba import njit
 
 @njit
-def threshold_index_cumulative(ar, start_index, threshold) -> int:
+def threshold_index_cumulative(ar, start_index, threshold):
     """
     Returns first index from start index where
     (sum of array[start_index:index+1] > threshold) on circular array.
@@ -16,12 +16,12 @@ def threshold_index_cumulative(ar, start_index, threshold) -> int:
         index = (start_index + offset) % ar.size
         sum += ar[index]
     if offset == ar.size:
-        return 0
+        return 0, offset
     else:
-        return index
+        return index, offset
 
 @njit
-def threshold_index(ar, start_index, threshold) -> int:
+def threshold_index(ar, start_index, threshold):
     """
     Returns first index from start index where (array[index] > threshold) on circular array.
     If none found returns 0.
@@ -32,6 +32,6 @@ def threshold_index(ar, start_index, threshold) -> int:
         offset += 1
         index = (start_index + offset) % ar.size
     if offset == ar.size:
-        return 0
+        return 0, offset
     else:
-        return index
+        return index, offset
