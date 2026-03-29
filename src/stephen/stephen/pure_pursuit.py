@@ -20,6 +20,8 @@ import termios
 import sys
 import tty
 from types import SimpleNamespace
+from .utils import threshold_index_cumulative
+from time import perf_counter
 
 map_path = os.environ.get('MAP_PATH')
 if map_path is None:
@@ -39,7 +41,7 @@ params = SimpleNamespace(
     speed=SimpleNamespace(v=0.0, key='s', name='speed'),
     lookahead=SimpleNamespace(v=0.8, key='l', name='lookahead'),
     acceleration=SimpleNamespace(v=0.0, key='a', name='acceleration'),
-    curvature_lookahead=SimpleNamespace(v=0.1, key='c', name='curvature lookahead'),
+    curvature_lookahead=SimpleNamespace(v=0.2, key='c', name='curvature lookahead'),
     velocities_coeff=SimpleNamespace(v=0.1, key='v', name='velocity coefficient'),
     velocities_mode=SimpleNamespace(v=False, key=None),
     curvature_lookahead_mode=SimpleNamespace(v=False, key=None),
@@ -94,16 +96,30 @@ class PurePursuit(Node):
         self.nearest_index = 0
         
         df = pd.read_csv(CSV_PATH, header=0, comment='#', sep=';')
-        self.waypoints_x = df.iloc[:, 1].to_numpy(dtype=float)
-        self.waypoints_y = df.iloc[:, 2].to_numpy(dtype=float)
-        self.waypoints_heading = df.iloc[:, 3].to_numpy(dtype=float)
-        self.velocities = df.iloc[:, 5].to_numpy(dtype=float)
+        waypoints_x_closed = df.iloc[:, 1].to_numpy(dtype=float)
+        self.waypoints_x = waypoints_x_closed[:-1]
+        waypoints_y_closed = df.iloc[:, 2].to_numpy(dtype=float)
+        self.waypoints_y = waypoints_y_closed[:-1]
+        self.waypoints_heading = df.iloc[:-1, 3].to_numpy(dtype=float)
+        self.curvatures = df.iloc[:-1, 4].to_numpy(dtype=float)
+        self.velocities = df.iloc[:-1, 5].to_numpy(dtype=float)
+        self.point_count = self.waypoints_x.size
         self.path_marker.points = [Point(x=float(x), y=float(y), z=0.0)
                               for x, y in zip(self.waypoints_x, self.waypoints_y)]
         
         # dists[0] = distance from point 0 to point 1
-        self.dists = np.hypot(np.diff(self.waypoints_x), np.diff(self.waypoints_y))
+        self.dists = np.hypot(np.diff(waypoints_x_closed), np.diff(waypoints_y_closed))
+        self.raceline_spacing = np.mean(self.dists)
+
+        # Cumulative distances
         self.dist_sums = np.cumsum(np.append(self.dists, self.dists))
+
+        # Curvature
+        self.abs_weighted_curvatures = np.abs(self.curvatures * self.raceline_spacing)
+
+        print(f'{np.min(self.dists)=}')
+        print(f'{np.max(self.dists)=}')
+        print(f'{np.mean(self.dists)=}')
         
         # Print key bindings
         command_bindings = '\n'.join(
@@ -122,7 +138,6 @@ class PurePursuit(Node):
         x_car_map = pose.position.x
         y_car_map = pose.position.y
         heading_car_map = self.quaternion_to_heading(pose.orientation)
-        lookahead = params.lookahead.v
 
         # ===================================================================================
 
@@ -131,15 +146,43 @@ class PurePursuit(Node):
         dy = y_car_map - self.waypoints_y
         d = np.hypot(dx, dy)
         self.nearest_index = np.argmin(d)
-        
-        # Find goal point (arc length lookahead)
-        relative_dists = self.dist_sums - self.dist_sums[self.nearest_index]
-        self.goal_index = np.searchsorted(relative_dists, lookahead) % d.size
+
+        # Find lookahead relative goal
+        if params.curvature_lookahead_mode.v:
+            lookahead_starttime = perf_counter()
+            x = 1
+            if x == 1:
+                threshold = params.curvature_lookahead.v
+                sum = 0
+                nearest = self.nearest_index
+                offset = 0
+                while (sum <= threshold and offset < self.point_count):
+                    index = (nearest + offset) % self.point_count
+                    sum += self.abs_weighted_curvatures[index]
+                    offset += 1
+                if offset < self.point_count:
+                    self.goal_index = index
+                else:
+                    print('Failed to find curvature lookahead')
+                    self.goal_index = nearest + 10
+            elif x == 2:
+                self.goal_index = threshold_index_cumulative(
+                    self.abs_weighted_curvatures, self.nearest_index, params.curvature_lookahead.v)
+                if self.goal_index == self.nearest_index:
+                    print('Failed to find lookahead')
+                    self.goal_index += 10
+
+            # print(f'lookahead time = {perf_counter() - lookahead_starttime:f}')
+        else:
+            lookahead = params.lookahead.v
+            # Arc length lookahead
+            relative_dists = self.dist_sums - self.dist_sums[self.nearest_index]
+            self.goal_index = np.searchsorted(relative_dists, lookahead) % self.point_count
 
         # Transform goal point to vehicle frame of reference
         x_goal_car, y_goal_car = self.map_to_car_point(
             pose, 
-            self.waypoints_x[self.goal_index], 
+            self.waypoints_x[self.goal_index],
             self.waypoints_y[self.goal_index])
 
         # Calculate curvature/steering angle
@@ -266,6 +309,12 @@ class PurePursuit(Node):
             elif key == 's':
                 print('Manual Speed')
                 params.velocities_mode.v = False
+            elif key == 'c':
+                print('Curvature Lookahead Mode')
+                params.curvature_lookahead_mode.v = True
+            elif key == 'l':
+                print('Manual Lookahead')
+                params.curvature_lookahead_mode.v = False
 
     def get_key(self):
         rlist, _, _ = select.select([sys.stdin], [], [], 0.005)

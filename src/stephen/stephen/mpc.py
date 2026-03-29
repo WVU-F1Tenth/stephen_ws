@@ -11,7 +11,7 @@ from rclpy.node import Node
 from scipy.linalg import block_diag
 from scipy.sparse import block_diag, csc_matrix, diags
 from sensor_msgs.msg import LaserScan
-from utils import nearest_point
+from mpc_utils import nearest_point
 from numpy import typing as npt
 from typing import Any
 
