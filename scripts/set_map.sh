@@ -56,7 +56,7 @@ fi
 
 # Add to particle filter maps
 PF_MAPS="$HOME/sim_ws/src/particle_filter/maps"
-if [[ -d "$PF_MAPS" ]]; then
+if [[ -d "$PF_MAPS" && -f "$MAP_PATH.pgm" ]]; then
     # Copy map to pf maps
     cp "$MAP_PATH.pgm" "$PF_MAPS/" ||
         echo "Error: Failed to copy pgm map to pf maps"
