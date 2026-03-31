@@ -20,8 +20,8 @@ def verify_and_fix_map(map_name):
         map_path = os.environ.get('MAP_PATH')
         if map_path is None:
             raise RuntimeError('MAP_PATH not set')
-        map_file = map_path+'_map.png'
-        backup_file = map_path+'_mapOG.png'
+        map_file = map_path+'.png'
+        backup_file = map_path+'OG.png'
 
     print(f"Checking map: {map_file}")
     

@@ -28,7 +28,7 @@ if [[ ! -d "$HOME/stephen_ws/src/stephen/data/maps/${1}/" ]]; then
     return 1
 fi
 
-cp "$DESKTOP/${1}.png" "$HOME/stephen_ws/src/stephen/data/maps/${1}/${1}_map.png" || {
+cp "$DESKTOP/${1}.png" "$HOME/stephen_ws/src/stephen/data/maps/${1}/${1}.png" || {
     echo "Failed to fetch desktop png map"
     return 1
 }

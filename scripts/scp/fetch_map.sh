@@ -46,7 +46,4 @@ if ! scp \
     return 1
 fi
 
-mv "$MAP_DIR/${1}.pgm" "$MAP_DIR/${1}_map.pgm"
-mv "$MAP_DIR/${1}.yaml" "$MAP_DIR/${1}_map.yaml"
-
 echo "$1 map fetched"
