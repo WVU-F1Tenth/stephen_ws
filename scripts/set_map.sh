@@ -46,7 +46,7 @@ if [[ -f "$HOME/sim_ws/src/f1tenth_gym_ros/config/sim.yaml" ]]; then
 fi
 
 # Clean map
-if [[ -f ${MAP_PATH}_map.png ]]; then
+if [[ -f ${MAP_PATH}.png ]]; then
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     python "$SCRIPT_DIR/verify_map.py" || {
         echo "Error: Failed to clean map"

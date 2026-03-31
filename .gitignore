@@ -1,4 +1,5 @@
-src/stephen/data/maps/
+# Maps
+# src/stephen/data/maps/
 
 # ROS2 build artifacts
 build/
