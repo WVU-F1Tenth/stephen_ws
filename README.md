@@ -6,7 +6,7 @@
 # Aliases
 SLAM
 ```
-alias slam="cd $HOME/sim_ws/; source install/setup.bash; ros2 launch slam_toolbox online_async_launch.py slam_params_file:=/home/nvidia/f1tenth_ws/src/f1tenth_system/f1tenth_stack/config/f1tenth_online_async.yaml"
+alias slam="cd $HOME/sim_ws/; source install/setup.bash; ros2 launch slam_toolbox online_async_launch.py slam_params_file:=/home/icps2/f1tenth_ws/src/f1tenth_system/f1tenth_stack/config/f1tenth_online_async.yaml"
 ```
 Particle filter
 ```
@@ -18,7 +18,7 @@ alias sim='cd ~/sim_ws/; source install/local_setup.bash; ros2 launch f1tenth_gy
 ```
 F1Tenth on car
 ```
-alias f1tenth="cd $HOME/f1tenth_ws/; source install/setup.bash; ros2 launch f1tenth_stack brinup
+alias f1tenth="cd $HOME/f1tenth_ws/; source install/setup.bash; ros2 launch f1tenth_stack bringup_launch.py"
 ```
 
 # Setup venv
