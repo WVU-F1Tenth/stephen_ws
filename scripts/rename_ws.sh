@@ -18,7 +18,7 @@ if [[ $response != 'y' ]]; then
     return 1
 fi
 
-find scripts/ -type f -name '*.sh' -exec sed "s/stephen/$1/g" {} + || {
+find scripts/ -type f -name '*.sh' -exec sed "s/stephen/$1/g" {} \; || {
     echo "find failed"
     return 1
 }
