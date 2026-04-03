@@ -1,36 +1,38 @@
 #!/usr/bin/env bash
 
-# Fetches map from car. Car must have active ssh server.
+# Fetches png map from DESKTOP
 
 # Assert: 
 # DESKTOP=<desktop path>
-# $1=MAP_NAME
+# MAP_PATH
 
 # Ensure script is sourced, not executed
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     echo "ERROR: This script must be sourced:"
-    echo "Usage: source set_map.sh <map-name>"
+    echo 'Usage: source fetch_desktop_map.sh'
     exit 1
 fi
 
 if [[ -z "$DESKTOP" ]]; then
     echo 'DESKTOP not set'
+    echo 'Usage: source fetch_desktop_map.sh'
     return 1
 fi
 
-if [[ -z "$1" ]]; then
-    echo 'Usage: source fetch_race_map.sh <map name>'
+if [[ -z "$MAP_PATH" ]]; then
+    echo "$MAP_PATH not set"
+    echo 'Usage: source fetch_desktop_map.sh'
     return 1
 fi
 
-if [[ ! -d "$HOME/stephen_ws/src/stephen/data/maps/${1}/" ]]; then
-    echo "Error: $HOME/stephen_ws/src/stephen/data/maps/${1} doesn't exist"
+if [[ ! -d "${MAP_PATH%/*}" ]]; then
+    echo "Error: ${MAP_PATH%/*} doesn't exist"
     return 1
 fi
 
-cp "$DESKTOP/${1}.png" "$HOME/stephen_ws/src/stephen/data/maps/${1}/${1}.png" || {
+cp "$DESKTOP/${MAP_PATH##*/}.png" "$MAP_PATH.png" || {
     echo "Failed to fetch desktop png map"
     return 1
 }
 
-echo 'png map fetched'
+echo 'Desktop png fetched'
