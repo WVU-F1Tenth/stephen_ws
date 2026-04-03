@@ -36,7 +36,7 @@ import tty
 #       Could use difference between depth and vdepth
 # - Create tracking line for sim to compare paths
 
-HERTZ = 40.0
+HERTZ = 0.0
 VISUALS = True
 LINE_STEERING_MARKER = True
 ARC_STEERING_MARKER = False
@@ -54,8 +54,9 @@ params = SimpleNamespace(
     speed=SimpleNamespace(v=0.0, key='s', name='speed'),
     velocities_coeff=SimpleNamespace(v=0.1, key='v', name='velocity coefficient'),
     velocities_mode=SimpleNamespace(v=False, key=None),
-    disparity_threshold=SimpleNamespace(v=0.5, key='t'),
-    steering_velocity_k=SimpleNamespace(v=0.0, key='w'),
+    disparity_threshold=SimpleNamespace(v=0.5, key='t', name='disparity threshold'),
+    steering_velocity=SimpleNamespace(v=0.0, key='w', name='steering velocity'),
+    map_extension=SimpleNamespace(v=0.3, key='e', name='map extension'),
 )
 SELECTED = params.speed
 
@@ -84,7 +85,7 @@ class PathFollow(Node):
         if PUBLISH_V2:
             self.v2_pub = self.create_publisher(Float32MultiArray, '/v2_ranges', 10)
         if LINE_STEERING_MARKER:
-            self.line_marker_pub = self.create_publisher(Marker, '/viz/steering_line', 10)
+            self.line_marker_pub = self.create_publisher(Marker, '/viz/goal', 10)
         if ARC_STEERING_MARKER:
             self.arc_marker_pub = self.create_publisher(Marker, '/viz/steering_arc', 10)
         if PUBLISH_POINTS1:
@@ -103,7 +104,6 @@ class PathFollow(Node):
         self.paths = []
         self.section = None
 
-        print(params.key_msg.v)
         self.fd = sys.stdin.fileno()
         self.terminal_settings = termios.tcgetattr(self.fd)
         tty.setcbreak(self.fd)
@@ -111,7 +111,7 @@ class PathFollow(Node):
         Vehicle.setup(
             wheelbase=0.33,
             radius=0.33,
-            max_steering_angle = 0.4
+            max_steering_angle = 0.38
         )
 
         self.planner = Planner(
@@ -138,6 +138,11 @@ class PathFollow(Node):
             a_slide=14.0,
             a_tip=10000.0,
             )
+        
+        # Print key bindings
+        command_bindings = '\n'.join(
+            [f'  {param.key}={param.name}' for param in vars(params).values() if param.key])
+        print(f'Commands:\n  space = stop\n{command_bindings}')
 
         # File output
         if FILE_OUTPUT:
@@ -163,7 +168,6 @@ class PathFollow(Node):
             Scan.setup(scan)
             self.v1 = np.zeros(Scan.size)
             self.v2 = np.zeros(Scan.size)
-            print('Running...')
         
         if FAST_PRINT:
             print(f'\n{"="*24}')
@@ -504,7 +508,7 @@ class Planner:
         ranges[ranges > limit] = safe_gap_value
 
     def get_virtual(self, ranges):
-        extension = self.extension
+        extension = params.map_extension.v
         n = len(ranges)
         range_matrix = np.full((n, n), np.inf, dtype=np.float32)
         ratio = extension / (2 * ranges)
@@ -531,7 +535,7 @@ class Planner:
         
         self.resolve_virtual(virtual, paths)
         
-        self.resolve_radii(ranges, paths, 2*self.extension)
+        self.resolve_radii(ranges, paths, params.map_extension.v)
 
         valid_paths = [path for path in paths if path.valid]
 
@@ -638,9 +642,13 @@ class Steering:
 class Smoothing:
     def __init__(self, limit):
         self.limit = limit
+        self.start_time = None
 
     def get(self, theta, speed):
-        dt = perf_counter() - self.start_time
+        if self.start_time:
+            dt = perf_counter() - self.start_time
+        else:
+            dt = 0.025
         self.start_time = perf_counter()
 
         # Low pass filter
@@ -650,7 +658,7 @@ class Smoothing:
             self.prev_filtered = theta
 
         # Velocity calulation
-        theta_velocity = params.steering_velocity_k.v * theta
+        theta_velocity = params.steering_velocity.v * theta
             
         # Slew rate (limit on rate of change)
         if False:
