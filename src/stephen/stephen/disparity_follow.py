@@ -43,20 +43,21 @@ ARC_STEERING_MARKER = False
 PUBLISH_POINTS1 = True
 PUBLISH_POINTS2 = True
 PUBLISH_POINTS3 = True
-PUBLISH_V1 = True
-PUBLISH_V2 = True
+PUBLISH_V1 = False
+PUBLISH_V2 = False
 VISUAL_HERTZ = 5.0
 FILE_OUTPUT = True
 FAST_PRINT = False
 
+
 params = SimpleNamespace(
-    speed=SimpleNamespace(v=0.0, keys=('s', 'd')),
-    disparity_threshold=SimpleNamespace(v=0.5, keys=('h', 'l')),
-    steering_velocity_k=SimpleNamespace(v=0.0, keys=('j', 'k')),
-    key_msg=SimpleNamespace(
-        v='Commands(space=stop, speed=sd, disparity=hl, steering_velocity_k=jk)',
-        keys=None),
-    )
+    speed=SimpleNamespace(v=0.0, key='s', name='speed'),
+    velocities_coeff=SimpleNamespace(v=0.1, key='v', name='velocity coefficient'),
+    velocities_mode=SimpleNamespace(v=False, key=None),
+    disparity_threshold=SimpleNamespace(v=0.5, key='t'),
+    steering_velocity_k=SimpleNamespace(v=0.0, key='w'),
+)
+SELECTED = params.speed
 
 file_info = SimpleNamespace(**{
     'path_info':{},
@@ -126,21 +127,7 @@ class PathFollow(Node):
         
         # Smoothing
         self.smoothing = Smoothing(
-            use_func=False,
-            use_filter=False,
-            use_pid=False,
-            use_slew=False,
-            tau=.05,
-            slew_rate=5.0,
-            pid=PID(
-                Kp=0.8,
-                Ki=0.0,
-                Kd=0.0,
-                setpoint=0.0,
-                sample_time=0.025,
-                proportional_on_measurement=False,
-                differential_on_measurement=True
-            ),
+            limit=Vehicle.max_steering_angle
         )
 
         # Speed
@@ -210,7 +197,7 @@ class PathFollow(Node):
         else:
             steering_angle = self.steering.get(path)
 
-            steering_angle = self.smoothing.get(steering_angle, self.speed)
+            steering_angle, steering_velocity = self.smoothing.get(steering_angle, self.speed)
 
             speed = self.speed_controller.get(steering_angle,  path.depth + Vehicle.radius - Vehicle.turning_radius)
         
@@ -228,9 +215,7 @@ class PathFollow(Node):
        
         drive_msg = AckermannDriveStamped()
         drive_msg.drive.steering_angle = steering_angle
-        sav_k = params.steering_velocity_k.v*0.1
-        sav = 0.0 if sav_k < 0.005 else sav_k * steering_angle
-        drive_msg.drive.steering_angle_velocity = sav
+        drive_msg.drive.steering_angle_velocity = steering_velocity
         drive_msg.drive.speed = speed
         self.drive_pub.publish(drive_msg)
 
@@ -362,32 +347,52 @@ class PathFollow(Node):
             self.points3_pub.publish(m)
 
     def check_input(self):
-        global params
+        global params, SELECTED
         key = self.get_key()
         if not key:
             return
         if key == ' ':
             params.speed.v = 0.0
+            params.velocities_coeff.v = 0.0
             print('stopped')
-        for name, d in vars(params).items():
-            if d.keys is None:
-                continue
-            k1, k2 = d.keys
-            if key == k1:
-                d.v -= 0.1
-            elif key == k1.upper():
-                d.v -= 1.0
-            elif key == k2:
-                d.v += 0.1
-            elif key == k2.upper():
-                d.v += 1.0
-            else:
-                continue
-            print(f'{name} = {d.v:.1f}')
-            break
+        elif key in ('i', 'o', 'j', 'k', 'n', 'm'):
+            if key == 'i':
+                SELECTED.v -= 1.0
+            elif key == 'o':
+                SELECTED.v += 1.0
+            elif key == 'j':
+                SELECTED.v -= 0.1
+            elif key == 'k':
+                SELECTED.v += 0.1
+            elif key == 'n':
+                SELECTED.v -= 0.01
+            elif key == 'm':
+                SELECTED.v += 0.01
+            print(f'{SELECTED.name} = {SELECTED.v:.2f}')
+        else:
+            for param in vars(params).values():
+                if key == param.key:
+                    if isinstance(param.v, float):
+                        SELECTED = param
+                        print(f'{param.name} selected')
+                        break
+                    elif isinstance(param.v, bool):
+                        param.v = not param.v
+            if key == 'v':
+                print('Velocities Mode')
+                params.velocities_mode.v = True
+            elif key == 's':
+                print('Manual Speed')
+                params.velocities_mode.v = False
+            elif key == 'c':
+                print('Curvature Lookahead Mode')
+                params.curvature_lookahead_mode.v = True
+            elif key == 'l':
+                print('Manual Lookahead')
+                params.curvature_lookahead_mode.v = False
 
     def get_key(self):
-        rlist, _, _ = select.select([sys.stdin], [], [], 0.01)
+        rlist, _, _ = select.select([sys.stdin], [], [], 0.005)
         if rlist:
             return sys.stdin.read(1)
         return None
@@ -631,70 +636,32 @@ class Steering:
         return angle
 
 class Smoothing:
-    def __init__(self, use_func, use_filter, use_pid, use_slew, tau, slew_rate, pid):
-        self.use_func = use_func
-        self.use_filter = use_filter
-        self.use_pid = use_pid
-        self.use_slew = use_slew
-        self.limit = Vehicle.max_steering_angle
-        self.pid = pid
-        self.pid.output_limits = (-self.limit, self.limit)
-        self.start_time = 0.0
-        # Max time interval
-        self.max_dt = .1
-        # Filter timescale (.025, 0.25)
-        self.tau = tau
-        # Max rate of change in steering
-        self.slew_rate = slew_rate
-        # Steering state
-        self.theta = 0.0
-        self.prev_filtered = 0.0
+    def __init__(self, limit):
+        self.limit = limit
 
-    def get(self, target, speed):
-        dt = min(perf_counter() - self.start_time, self.max_dt)
+    def get(self, theta, speed):
+        dt = perf_counter() - self.start_time
         self.start_time = perf_counter()
 
         # Low pass filter
-        if self.use_filter:
+        if False:
             alpha = self.tau/(self.tau + dt)
-            target = (alpha * self.prev_filtered) + ((1 - alpha) * target)
-            self.prev_filtered = target
+            theta = (alpha * self.prev_filtered) + ((1 - alpha) * theta)
+            self.prev_filtered = theta
 
-        # Saturation (min and max limits)
-        target = np.clip(target, -self.limit, self.limit)
-        
-        # Apply func
-        if self.use_func:
-            sign = -1 if target < 0 else 1
-            target = sign * self.limit * (abs(target)/self.limit)**params.smoothing_exp.v
-
-        # PID
-        if self.use_pid:
-            target = self.pid(-target)
-            if target is None:
-                raise ValueError('Failed to get PID')
+        # Velocity calulation
+        theta_velocity = params.steering_velocity_k.v * theta
             
-        # Saturation (min and max limits)
-        before_clip = abs(target)
-        target = np.clip(target, -self.limit, self.limit)
-        if (before_clip != self.limit and abs(target) == self.limit):
-            print('CLIPPED 2')
-
         # Slew rate (limit on rate of change)
-        if self.use_slew:
-            delta = target - self.theta
+        if False:
+            delta = theta - self.theta
             max_step = self.slew_rate * dt
             if abs(delta) > max_step:
-                target = self.theta + (max_step if delta > 0 else -max_step)
+                theta = self.theta + (max_step if delta > 0 else -max_step)
 
-        # Saturation (min and max limits)
-        before_clip = abs(target)
-        target = np.clip(target, -self.limit, self.limit)
-        if (before_clip != self.limit and abs(target) == self.limit):
-            print('CLIPPED 3')
-
-        self.theta = target
-        return target
+        theta = np.clip(theta, -self.limit, self.limit)
+        self.theta = theta
+        return theta, theta_velocity
         
 class SpeedController:
 

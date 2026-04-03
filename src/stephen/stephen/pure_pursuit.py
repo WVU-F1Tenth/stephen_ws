@@ -30,7 +30,7 @@ CSV_PATH = Path(map_path+'_raceline.csv')
 if not CSV_PATH.exists():
     raise RuntimeError("Waypoint file doesn't exist")
 
-SIMULATOR = True
+SIMULATOR = False
 CCW = True
 WHEELBASE = 0.33
 MAX_STEER = 0.38

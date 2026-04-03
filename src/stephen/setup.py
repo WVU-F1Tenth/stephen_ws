@@ -23,7 +23,7 @@ setup(
             'gap_follow=stephen.gap_follow:main',
             'wall_follow=stephen.wall_follow:main',
             'scan_visual=stephen.scan_visual:main',
-            'path_follow=stephen.path_follow:main',
+            'disparity_follow=stephen.disparity_follow:main',
             'test=stephen.testing:main',
             'pure_pursuit=stephen.pure_pursuit:main',
             'stanley=stephen.stanley:main',
