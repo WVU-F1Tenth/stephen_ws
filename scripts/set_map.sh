@@ -37,14 +37,6 @@ sed -i \
     "$HOME/.bashrc" ||
     echo "Error: Failed to edit .bashrc"
 
-# Edit sim_ws yaml
-if [[ -f "$HOME/sim_ws/src/f1tenth_gym_ros/config/sim.yaml" ]]; then
-    sed -Ei "s|(^[[:space:]]*)map_path:.*|\1map_path: '$MAP_PATH'|" \
-        "$HOME/sim_ws/src/f1tenth_gym_ros/config/sim.yaml" ||
-        echo "Error: Failed to update sim yaml"
-    echo "Sim set"
-fi
-
 # Clean map
 if [[ -f ${MAP_PATH}.png ]]; then
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -52,6 +44,24 @@ if [[ -f ${MAP_PATH}.png ]]; then
         echo "Error: Failed to clean map"
         return 1
     }
+fi
+
+# Edit sim_ws yaml
+if [[ -f "$HOME/sim_ws/src/f1tenth_gym_ros/config/sim.yaml" ]]; then
+    sed -Ei "s|(^[[:space:]]*)map_path:.*|\1map_path: '$MAP_PATH'|" \
+        "$HOME/sim_ws/src/f1tenth_gym_ros/config/sim.yaml" ||
+        echo "Error: Failed to update sim yaml"
+    # Edit map yaml map image to match
+    if [[ -f "$MAP_PATH.png" ]]; then
+        sed -Ei "s|(^[[:space:]]*)image:.*|\1image: '$MAP_NAME.png'|" \
+            "$MAP_PATH.yaml" ||
+            echo "Error: Failed to update map yaml"
+    else
+        sed -Ei "s|(^[[:space:]]*)image:.*|\1image: '$MAP_NAME.pgm'|" \
+            "$MAP_PATH.yaml" ||
+            echo "Error: Failed to update map yaml"
+    fi
+    echo "Sim set"
 fi
 
 # Add to particle filter maps
