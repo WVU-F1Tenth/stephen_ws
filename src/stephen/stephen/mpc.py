@@ -8,7 +8,7 @@ import rclpy
 from ackermann_msgs.msg import AckermannDrive, AckermannDriveStamped
 from geometry_msgs.msg import PoseStamped
 from rclpy.node import Node
-from scipy.linalg import block_diag
+# from scipy.linalg import block_diag
 from scipy.sparse import block_diag, csc_matrix, diags
 from sensor_msgs.msg import LaserScan
 from mpc_utils import nearest_point
@@ -43,16 +43,16 @@ class mpc_config:
 
     N_IND_SEARCH: int = 20  # Search index number
     DTK: float = 0.1  # Time step used
-    dlk: float = 0.03  # Distance between reference points
+    dlk: float = 0.1  # Distance between reference points
     LENGTH: float = 0.58  # Length of the vehicle [m]
     WIDTH: float = 0.31  # Width of the vehicle [m]
     WB: float = 0.33  # Wheelbase [m]
-    MIN_STEER: float = -0.4189  # maximum steering angle [rad]
+    MIN_STEER: float = -0.4189  # minimum steering angle [rad]
     MAX_STEER: float = 0.4189  # maximum steering angle [rad]
-    MAX_DSTEER: float = np.deg2rad(180.0)  # maximum steering speed [rad/s]
-    MAX_SPEED: float = 6.0  # maximum speed [m/s]
+    MAX_DSTEER: float = np.deg2rad(90)  # maximum steering speed [rad/s]
+    MAX_SPEED: float = 8.0  # maximum speed [m/s]
     MIN_SPEED: float = 0.0  # minimum backward speed [m/s]
-    MAX_ACCEL: float = 3.0  # maximum acceleration [m/ss]
+    MAX_ACCEL: float = 2.0  # maximum acceleration [m/ss]
 
 
 @dataclass
