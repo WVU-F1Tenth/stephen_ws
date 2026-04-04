@@ -43,7 +43,7 @@ ARC_STEERING_MARKER = False
 PUBLISH_POINTS1 = True
 PUBLISH_POINTS2 = True
 PUBLISH_POINTS3 = True
-PUBLISH_V1 = False
+PUBLISH_V1 = True
 PUBLISH_V2 = False
 VISUAL_HERTZ = 5.0
 FILE_OUTPUT = True
@@ -56,7 +56,7 @@ params = SimpleNamespace(
     velocities_mode=SimpleNamespace(v=False, key=None),
     disparity_threshold=SimpleNamespace(v=0.5, key='t', name='disparity threshold'),
     steering_velocity=SimpleNamespace(v=0.0, key='w', name='steering velocity'),
-    map_extension=SimpleNamespace(v=0.3, key='e', name='map extension'),
+    map_extension=SimpleNamespace(v=0.25, key='e', name='map extension'),
 )
 SELECTED = params.speed
 
@@ -186,6 +186,11 @@ class PathFollow(Node):
 
         virtual = self.planner.get_virtual(ranges)
 
+        if virtual is None:
+            print('No path...')
+            self.publish_drive(0.0, 0.0, 0.0)
+            return
+
         self.v1[:] = virtual
         
         pos_disps, neg_disps = self.planner.disparities(ranges)
@@ -217,11 +222,7 @@ class PathFollow(Node):
             self.steering_angle = steering_angle
             self.virtual = virtual
        
-        drive_msg = AckermannDriveStamped()
-        drive_msg.drive.steering_angle = steering_angle
-        drive_msg.drive.steering_angle_velocity = steering_velocity
-        drive_msg.drive.speed = speed
-        self.drive_pub.publish(drive_msg)
+        self.publish_drive(speed, steering_angle, steering_velocity)
 
         adjust_time = (perf_counter() - adjust_start) * 1000
 
@@ -241,6 +242,13 @@ class PathFollow(Node):
             file_info.virtual_scan_info['min_range'] = min(np.min(ranges), file_info.virtual_scan_info['min_range'])
 
         self.overhead_start = perf_counter()
+
+    def publish_drive(self, velocity, steering_angle, steering_velocity):
+        drive_msg = AckermannDriveStamped()
+        drive_msg.drive.steering_angle = steering_angle
+        drive_msg.drive.steering_angle_velocity = steering_velocity
+        drive_msg.drive.speed = velocity
+        self.drive_pub.publish(drive_msg)
     
     def publish_markers(self):
         if PUBLISH_V1:
@@ -543,6 +551,8 @@ class Planner:
     
     def resolve_virtual(self, virtual, paths):
         pdisps, ndisps = self.disparities(virtual)
+        if pdisps.size == 0 and ndisps.size == 0:
+            return None
         vdisps = np.sort(np.concatenate((pdisps, ndisps)))
         for path in paths:
             diff = np.abs(vdisps - path.index)

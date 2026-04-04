@@ -32,7 +32,7 @@ fi
 
 if [[ -f "$MAP_PATH.png" ]]; then
     cp "$MAP_PATH.png" "$DESKTOP/"
-elif [[ -f "$MAP_PATH.pgm" ]]
+elif [[ -f "$MAP_PATH.pgm" ]]; then
     convert "$MAP_PATH.pgm" "$MAP_PATH.png"
     cp "$MAP_PATH.png" "$DESKTOP/"
 else
