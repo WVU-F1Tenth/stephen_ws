@@ -1,4 +1,4 @@
-image: '4_4.pgm'
+image: '4_4.png'
 mode: trinary
 resolution: 0.05
 origin: [-17.1, -6.12, 0]

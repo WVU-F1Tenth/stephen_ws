@@ -8,3 +8,5 @@ colcon-common-extensions
 # glfw
 pillow
 cvxpy
+# pyclothoid
+matplotlib
