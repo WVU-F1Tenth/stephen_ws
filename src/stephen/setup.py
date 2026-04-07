@@ -27,6 +27,7 @@ setup(
             'test=stephen.testing:main',
             'pure_pursuit=stephen.pure_pursuit:main',
             'stanley=stephen.stanley:main',
+            'mpc=stephen.mpc:main',
         ],
     },
 )

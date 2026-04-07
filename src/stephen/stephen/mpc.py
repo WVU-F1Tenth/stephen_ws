@@ -4,24 +4,33 @@ from dataclasses import dataclass, field
 import cvxpy
 import numpy as np
 import rclpy
-from ackermann_msgs.msg import AckermannDrive, AckermannDriveStamped
-from geometry_msgs.msg import PoseStamped
+from ackermann_msgs.msg import  AckermannDriveStamped
 from rclpy.node import Node
 # from scipy.linalg import block_diag
 from scipy.sparse import block_diag, csc_matrix, diags
 from sensor_msgs.msg import LaserScan
-from mpc_utils import nearest_point
+from .mpc_utils import nearest_point
 from numpy import typing as npt
 from typing import Any
 import os
 from pathlib import Path
 from visualization_msgs.msg import Marker
 from nav_msgs.msg import Odometry
-from geometry_msgs.msg import Point, PoseStamped, Quaternion
+from geometry_msgs.msg import Point, PoseStamped
 import pandas as pd
 from scipy.spatial.transform import Rotation
+import select
+import termios
+import sys
+import tty
+from types import SimpleNamespace
 
 SIMULATOR = True
+
+params = SimpleNamespace(
+    speed=SimpleNamespace(v=0.0, key='s', name='speed'),
+)
+SELECTED = params.speed
 
 map_path = os.environ.get('MAP_PATH')
 if map_path is None:
@@ -34,23 +43,23 @@ if not CSV_PATH.exists():
 @dataclass
 class mpc_config:
     NXK: int = 4  # length of kinematic state vector: z = [x, y, v, yaw]
-    NU: int = 2  # length of input vector: u = = [acceleration, steering speed]
+    NU: int = 2  # length of input vector: u = = [acceleration, delta]
     TK: int = 8  # finite time horizon length kinematic
 
     # ---------------------------------------------------
     # TODO: you may need to tune the following matrices
     Rk: npt.NDArray[Any] = field(
         default_factory=lambda: np.diag([0.01, 100.0])
-    )  # input cost matrix, penalty for inputs - [accel, steering_speed]
+    )  # input cost matrix, penalty for inputs - [accel, steering]
     Rdk: npt.NDArray[Any] = field(
         default_factory=lambda: np.diag([0.01, 100.0])
-    )  # input difference cost matrix, penalty for change of inputs - [accel, steering_speed]
+    )  # input difference cost matrix, penalty for change of inputs - [accel, steering]
     Qk: npt.NDArray[Any] = field(
-        default_factory=lambda: np.diag([13.5, 13.5, 5.5, 13.0])
-    )  # state error cost matrix, for the the next (T) prediction time steps [x, y, delta, v, yaw, yaw-rate, beta]
+        default_factory=lambda: np.diag([13.5, 13.5, 5.5, 13.0])*2.0
+    )  # state error cost matrix, for the the next (T) prediction time steps [x, y, v, yaw]
     Qfk: npt.NDArray[Any] = field(
         default_factory=lambda: np.diag([13.5, 13.5, 5.5, 13.0])
-    )  # final state error matrix, penalty  for the final state constraints: [x, y, delta, v, yaw, yaw-rate, beta]
+    )  # final state error matrix, penalty  for the final state constraints: [x, y, v, yaw]
     # ---------------------------------------------------
 
     N_IND_SEARCH: int = 20  # Search index number
@@ -59,10 +68,10 @@ class mpc_config:
     LENGTH: float = 0.58  # Length of the vehicle [m]
     WIDTH: float = 0.31  # Width of the vehicle [m]
     WB: float = 0.33  # Wheelbase [m]
-    MIN_STEER: float = -0.4189  # minimum steering angle [rad]
-    MAX_STEER: float = 0.4189  # maximum steering angle [rad]
+    MIN_STEER: float = -0.4  # minimum steering angle [rad]
+    MAX_STEER: float = 0.4  # maximum steering angle [rad]
     MAX_DSTEER: float = np.deg2rad(90)  # maximum steering speed [rad/s]
-    MAX_SPEED: float = 8.0  # maximum speed [m/s]
+    MAX_SPEED: float = 5.0  # maximum speed [m/s]
     MIN_SPEED: float = 0.0  # minimum backward speed [m/s]
     MAX_ACCEL: float = 2.0  # maximum acceleration [m/ss]
 
@@ -86,7 +95,8 @@ class MPC(Node):
         if SIMULATOR:
             self.sub_odom = self.create_subscription(Odometry, '/ego_racecar/odom', self.odom_callback,  1)
         else:
-            self.sub_pose = self.create_subscription(PoseStamped, '/pf/viz/inferred_pose', self.pose_callback, 1)
+            self.sub_pose = self.create_subscription(Odometry, '/pf/viz/odom', self.pose_callback, 1)
+        self.keyboard_timer = self.create_timer(.5, self.check_input)
         
         # Reading CSV data
         df = pd.read_csv(CSV_PATH, header=0, comment='#', sep=';')
@@ -112,24 +122,29 @@ class MPC(Node):
         self.path_marker.color.b = 1.0
         self.path_marker.points = [Point(x=float(x), y=float(y), z=0.0)
                               for x, y in zip(self.ref_x, self.ref_y)]
+        self.raceline_viz.publish(self.path_marker)
         
         # dists[0] = distance from point 0 to point 1
         self.dists = np.hypot(np.diff(waypoints_x_closed), np.diff(waypoints_y_closed))
-        self.raceline_spacing = np.mean(self.dists)
-        self.waypoints = None
+        self.raceline_spacing = float(np.mean(self.dists))
 
         self.config = mpc_config()
-        # Old inputs
-        self.odelta_v = 0.0
-        self.odelta = 0.0
-        self.oa = 0.0
+        self.config.dlk = self.raceline_spacing
+        self.odelta = [0.0] * self.config.TK
+        self.oa = [0.0] * self.config.TK
+        self.odelta_input = 0.0
+        self.ovel_input = 0.0
         self.init_flag = 0
 
         # initialize MPC problem
         self.mpc_prob_init()
 
+        self.fd = sys.stdin.fileno()
+        self.terminal_settings = termios.tcgetattr(self.fd)
+        tty.setcbreak(self.fd)
+
     def odom_callback(self, odometry_info: Odometry):
-        self.pose_callback(odometry_info.pose)
+        self.pose_callback(odometry_info)
 
     def pose_callback(self, odometry_info):
         pose = odometry_info.pose.pose
@@ -137,7 +152,7 @@ class MPC(Node):
         vehicle_state = State(
             x = pose.position.x,
             y = pose.position.y,
-            delta = self.odelta,
+            delta =self.odelta_input,
             v = twist.linear.x,
             yaw = self.quat_to_heading(pose.orientation),
             yawrate = twist.angular.z,
@@ -150,20 +165,25 @@ class MPC(Node):
         # TODO: solve the MPC control problem
         (
             self.oa,
-            self.odelta_v,
+            self.odelta,
             ox,
             oy,
             oyaw,
             ov,
             state_predict,
-        ) = self.linear_mpc_control(ref_path, x0, self.oa, self.odelta_v)
-
+        ) = self.linear_mpc_control(ref_path, x0, self.oa, self.odelta)
+        
+        self.ovel_input = np.clip(vehicle_state.v + self.oa[0] * self.config.DTK,
+                            self.config.MIN_SPEED,
+                            self.config.MAX_SPEED)
+        self.odelta_input = np.clip(self.odelta[0],
+                            self.config.MIN_STEER,
+                            self.config.MAX_STEER)
         ackermann_drive_result = AckermannDriveStamped()
-        steer_output = vehicle_state.delta + self.odelta_v[0] * self.config.DTK
-        speed_output = vehicle_state.v + self.oa[0] * self.config.DTK
         ackermann_drive_result.header.stamp = self.get_clock().now().to_msg()
-        ackermann_drive_result.drive.steering_angle = steer_output
-        ackermann_drive_result.drive.speed = speed_output
+        ackermann_drive_result.drive.steering_angle = self.odelta_input
+        vel_input = 0.0 if params.speed.v < 0.05 else self.ovel_input
+        ackermann_drive_result.drive.speed = vel_input
         self.pub_drive.publish(ackermann_drive_result)
 
     def mpc_prob_init(self):
@@ -205,7 +225,7 @@ class MPC(Node):
 
         # Objective
         traj_error_term = cvxpy.quad_form(
-            cvxpy.reshape(self.xk - self.ref_traj_k, (self.config.NXK * self.config.TK,), order='F'), 
+            cvxpy.reshape(self.xk - self.ref_traj_k, (self.config.NXK * (self.config.TK + 1),), order='F'), 
             Q_block)
         
         control_term = cvxpy.quad_form(
@@ -217,7 +237,7 @@ class MPC(Node):
             cvxpy.reshape(du, (self.config.NU * (self.config.TK - 1),), order='F'),
             Rd_block)
         
-        objective = cvxpy.Minimize(traj_error_term + control_term + control_diff_term)
+        objective = traj_error_term + control_term + control_diff_term
 
         # Constraints 1: Calculate the future vehicle behavior/states based on the vehicle dynamics model matrices
         # Evaluate vehicle Dynamics for next T timesteps
@@ -228,14 +248,14 @@ class MPC(Node):
         path_predict = np.zeros((self.config.NXK, self.config.TK + 1))
         for t in range(self.config.TK):
             A, B, C = self.get_model_matrix(
-                path_predict[2, t], path_predict[3, t], 0.0
+                path_predict[2, t], path_predict[3, t], self.odelta_input
             )
             A_block.append(A)
             B_block.append(B)
             C_block.extend(C)
 
-        A_block = block_diag(tuple(A_block))
-        B_block = block_diag(tuple(B_block))
+        A_block = block_diag(tuple(A_block)).tocoo()
+        B_block = block_diag(tuple(B_block)).tocoo()
         C_block = np.array(C_block)
 
         # [AA] Sparse matrix to CVX parameter for proper stuffing
@@ -312,6 +332,7 @@ class MPC(Node):
         # Create placeholder Arrays for the reference trajectory for T steps
         ref_traj = np.zeros((self.config.NXK, self.config.TK + 1))
         ncourse = len(cx)
+        cyaw = cyaw.copy()
 
         # Find nearest index/setpoint from where the trajectories are calculated
         _, _, _, ind = nearest_point(np.array([state.x, state.y]), np.array([cx, cy]).T)
@@ -338,12 +359,8 @@ class MPC(Node):
         ref_traj[2, :] = sp[ind_list]
         # Anywere | yaw - course_yaw | > 4.5, shift by 2pi
         # TODO switch to wrapping at pi instead of 4.5
-        cyaw[cyaw - state.yaw > 4.5] = np.abs(
-            cyaw[cyaw - state.yaw > 4.5] - (2 * np.pi)
-        )
-        cyaw[cyaw - state.yaw < -4.5] = np.abs(
-            cyaw[cyaw - state.yaw < -4.5] + (2 * np.pi)
-        )
+        cyaw[cyaw - state.yaw > 4.5] -= 2 * np.pi
+        cyaw[cyaw - state.yaw < -4.5] += 2 * np.pi
         ref_traj[3, :] = cyaw[ind_list]
 
         return ref_traj
@@ -428,14 +445,14 @@ class MPC(Node):
         C_block = []
         for t in range(self.config.TK):
             A, B, C = self.get_model_matrix(
-                path_predict[2, t], path_predict[3, t], 0.0
+                path_predict[2, t], path_predict[3, t], self.odelta_input
             )
             A_block.append(A)
             B_block.append(B)
             C_block.extend(C)
 
-        A_block = block_diag(tuple(A_block))
-        B_block = block_diag(tuple(B_block))
+        A_block = block_diag(tuple(A_block)).tocoo()
+        B_block = block_diag(tuple(B_block)).tocoo()
         C_block = np.array(C_block)
 
         self.Annz_k.value = A_block.data
@@ -488,12 +505,52 @@ class MPC(Node):
         )
 
         return mpc_a, mpc_delta, mpc_x, mpc_y, mpc_yaw, mpc_v, path_predict
+    
+    def check_input(self):
+        global params, SELECTED
+        key = self.get_key()
+        if not key:
+            return
+        if key == ' ':
+            params.speed.v = 0.0
+            print('stopped')
+        elif key in ('i', 'o', 'j', 'k', 'n', 'm'):
+            if key == 'i':
+                SELECTED.v -= 1.0
+            elif key == 'o':
+                SELECTED.v += 1.0
+            elif key == 'j':
+                SELECTED.v -= 0.1
+            elif key == 'k':
+                SELECTED.v += 0.1
+            elif key == 'n':
+                SELECTED.v -= 0.01
+            elif key == 'm':
+                SELECTED.v += 0.01
+            print(f'{SELECTED.name} = {SELECTED.v:.2f}')
+        else:
+            for param in vars(params).values():
+                if key == param.key:
+                    if isinstance(param.v, float):
+                        SELECTED = param
+                        print(f'{param.name} selected')
+                        break
+                    elif isinstance(param.v, bool):
+                        param.v = not param.v
+
+    def get_key(self):
+        rlist, _, _ = select.select([sys.stdin], [], [], 0.005)
+        if rlist:
+            return sys.stdin.read(1)
+        return None
 
 def main(args=None):
     rclpy.init(args=args)
     print("MPC Initialized")
-    mpc_node = MPC()
-    rclpy.spin(mpc_node)
-
-    mpc_node.destroy_node()
-    rclpy.shutdown()
+    node = MPC()
+    try:
+        rclpy.spin(node)
+    finally:
+        termios.tcsetattr(node.fd, termios.TCSADRAIN, node.terminal_settings)
+        node.destroy_node()
+        rclpy.shutdown()
