@@ -240,7 +240,7 @@ class MPC(Node):
             cvxpy.reshape(du, (self.config.NU * (self.config.TK - 1),), order='F'),
             Rd_block)
         
-        prev_du = du[:, 0] - self.prev_u_k
+        prev_du = self.uk[:, 0] - self.prev_u_k
         prev_du_term = cvxpy.quad_form(prev_du, self.config.Rdk)
         
         objective = traj_error_term + control_term + control_diff_term + prev_du_term
