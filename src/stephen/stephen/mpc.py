@@ -24,6 +24,7 @@ import termios
 import sys
 import tty
 from types import SimpleNamespace
+from time import perf_counter
 
 SIMULATOR = True
 
@@ -95,6 +96,9 @@ class MPC(Node):
         else:
             self.sub_pose = self.create_subscription(Odometry, '/pf/viz/odom', self.pose_callback, 1)
         self.keyboard_timer = self.create_timer(.5, self.check_input)
+        self.print_timer = self.create_timer(1.0, self.print_info)
+        self.mpc_solve_time = 0.0
+        self.mpc_total_time = 0.0
         
         # Reading CSV data
         df = pd.read_csv(CSV_PATH, header=0, comment='#', sep=';')
@@ -146,6 +150,7 @@ class MPC(Node):
         self.pose_callback(odometry_info)
 
     def pose_callback(self, odometry_info):
+        self.mpc_total_time_start = perf_counter()
         pose = odometry_info.pose.pose
         twist = odometry_info.twist.twist
         vehicle_state = State(
@@ -184,6 +189,7 @@ class MPC(Node):
         vel_input = 0.0 if params.speed.v < 0.05 else self.ovel_input
         ackermann_drive_result.drive.speed = vel_input
         self.pub_drive.publish(ackermann_drive_result)
+        self.mpc_total_time = perf_counter() - self.mpc_total_time_start
 
     def mpc_prob_init(self):
         """
@@ -469,7 +475,9 @@ class MPC(Node):
 
         # Solve the optimization problem in CVXPY
         # Solver selections: cvxpy.OSQP; cvxpy.GUROBI
+        self.mpc_solve_time_start = perf_counter()
         self.MPC_prob.solve(solver=cvxpy.OSQP, verbose=False, warm_start=True)
+        self.mpc_solve_time = perf_counter() - self.mpc_solve_time_start
 
         if (
             self.MPC_prob.status == cvxpy.OPTIMAL
@@ -549,6 +557,10 @@ class MPC(Node):
         if rlist:
             return sys.stdin.read(1)
         return None
+
+    def print_info(self):
+        print(f'mpc solve time          {self.mpc_solve_time}')
+        print(f'total pipeline time  {self.mpc_total_time}\n')
 
 def main(args=None):
     rclpy.init(args=args)
