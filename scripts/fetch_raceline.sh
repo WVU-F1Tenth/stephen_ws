@@ -7,23 +7,23 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     exit 1
 fi
 
-if [[ -z $MAP_PATH ]]; then
-    echo 'MAP_PATH not set'
+if [[ -z "$1" ]]; then
+    echo "Usage: source fetch_raceline.sh <map-name>"
     return 1
 fi
 
-RACELINE_DEST="${MAP_PATH}_raceline.csv"
-
-RACELINE_SRC="$HOME/Raceline-Optimization/outputs/${MAP_PATH##*/}/*"
-RACELINE_SRC=( $RACELINE_SRC )
-if (( ${#RACELINE_SRC[@]} == 0 )); then
-    echo 'ERROR: No raceline files found'
-    return 1
-elif (( ${#RACELINE_SRC[@]} > 1 )); then
-    echo 'ERROR: Multiple racelines found'
+if [[ -z "$HOME/stephen_ws/src/stephen/data/maps/$1/$1" ]]; then
+    echo "$1 map doesn't exist"
     return 1
 fi
-RACELINE_SRC=${RACELINE_SRC[0]}
+
+RACELINE_DEST="$HOME/stephen_ws/src/stephen/data/maps/$1/${1}_raceline.csv"
+RACELINE_SRC="$HOME/Raceline-Optimization/outputs/$1/${1}_raceline.csv"
+
+if [[ ! -f "$RACELINE_SRC" ]]; then
+    echo "$1 raceline not found"
+    return 1
+fi
 
 cp "$RACELINE_SRC" "$RACELINE_DEST" || {
     echo "Error: failed to fetch raceline"

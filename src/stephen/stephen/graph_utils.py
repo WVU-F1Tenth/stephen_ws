@@ -76,6 +76,7 @@ class Graph:
             f_cur, cur = heappop(frontier)
             if f_cur > g_score[cur] + h(cur, self.goal):
                 continue
+            yield cur
             if cur == self.goal:
                 return self.reconstruct_path(previous)
             for neigh in self.neighbors(cur):
@@ -86,7 +87,6 @@ class Graph:
                     g_score[neigh] = g_score[cur] + step_cost
                     f_score = g_score[neigh] + h_score
                     heappush(frontier, (f_score, neigh))
-                    yield neigh
         return None
     
     def reconstruct_path(self, previous):

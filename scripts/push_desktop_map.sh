@@ -4,7 +4,6 @@
 
 # Assert: 
 # DESKTOP=<desktop path>
-# MAP_PATH
 
 # Ensure script is sourced, not executed
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
@@ -13,17 +12,18 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     exit 1
 fi
 
+if [[ -z "$1" ]]; then
+    echo "Usage: source push_desktop_map.sh <map-name>"
+    return 1
+fi
+
 if [[ -z "$DESKTOP" ]]; then
     echo 'DESKTOP not set'
     echo "Usage: source push_desktop_map.sh"
     return 1
 fi
 
-if [[ -z $MAP_PATH ]]; then
-    echo 'MAP_PATH not set'
-    echo "Usage: source push_desktop_map.sh"
-    return 1
-fi
+MAP_PATH="$HOME/stephen_ws/src/stephen/data/maps/$1/$1"
 
 if [[ ! -d "${MAP_PATH%/*}" ]]; then
     echo "Error: ${MAP_PATH%/*} doesn't exist"

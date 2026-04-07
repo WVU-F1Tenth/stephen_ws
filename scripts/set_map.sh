@@ -30,13 +30,6 @@ if [[ ! -f "$MAP_PATH.yaml" ]]; then
     return 1
 fi
 
-# Write MAP_PATH export to .bashrc
-sed -i \
-    -e "/^export MAP_PATH=.*/d" \
-    -e "\$a export MAP_PATH=\"$MAP_PATH\"" \
-    "$HOME/.bashrc" ||
-    echo "Error: Failed to edit .bashrc"
-
 # Clean map
 if [[ -f ${MAP_PATH}.png ]]; then
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -126,7 +126,6 @@ class MPC(Node):
         self.uk = cvxpy.Variable(
             (self.config.NU, self.config.TK)
         )
-        objective = 0.0  # Objective value of the optimization problem
         constraints = []  # Create constraints array
 
         # Initialize reference vectors
@@ -148,19 +147,11 @@ class MPC(Node):
         Q_block.append(self.config.Qfk)
         Q_block = block_diag(tuple(Q_block))
 
-        # Formulate and create the finite-horizon optimal control problem (objective function)
-        # The FTOCP has the horizon of T timesteps
-
-        # --------------------------------------------------------
-        # TODO: fill in the objectives here, you should be using cvxpy.quad_form() somehwhere
-
-        # TODO: Objective part 1: Influence of the control inputs: Inputs u multiplied by the penalty R
-
-        # TODO: Objective part 2: Deviation of the vehicle from the reference trajectory weighted by Q, including final Timestep T weighted by Qf
-
-        # TODO: Objective part 3: Difference from one control input to the next control input weighted by Rd
-
-        # --------------------------------------------------------
+        # Objective
+        traj_error_term = cvxpy.quad_form(self.xk - self.ref_traj_k, Q_block)
+        control_term = cvxpy.quad_form(self.uk, R_block)
+        control_diff_term = cvxpy.quad_form(self.uk, Rd_block)
+        objective = cvxpy.Minimize(traj_error_term + control_term + control_diff_term)
 
         # Constraints 1: Calculate the future vehicle behavior/states based on the vehicle dynamics model matrices
         # Evaluate vehicle Dynamics for next T timesteps
@@ -215,11 +206,20 @@ class MPC(Node):
         #       Add dynamics constraints to the optimization problem
         #       This constraint should be based on a few variables:
         #       self.xk, self.Ak_, self.Bk_, self.uk, and self.Ck_
+        constraints.append(
+            cvxpy.reshape(self.xk[:, 1:], (self.config.NXK*self.config.TK,), order='F')
+            == self.Ak_ @ cvxpy.reshape(self.xk[:, :-1], (self.config.NXK*self.config.TK), order='F')
+            + self.Bk_ @ cvxpy.reshape(self.uk, (self.config.NU*self.config.TK), order='F')
+            + self.Ck_
+            )
         
         # TODO: Constraint part 2:
         #       Add constraints on steering, change in steering angle
         #       cannot exceed steering angle speed limit. Should be based on:
         #       self.uk, self.config.MAX_DSTEER, self.config.DTK
+        constraints.append(
+            self.uk <= self
+        )
 
         # TODO: Constraint part 3:
         #       Add constraints on upper and lower bounds of states and inputs
