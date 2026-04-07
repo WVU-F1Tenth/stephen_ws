@@ -28,7 +28,7 @@ from types import SimpleNamespace
 SIMULATOR = True
 
 params = SimpleNamespace(
-    speed=SimpleNamespace(v=0.0, key='s', name='speed'),
+    speed=SimpleNamespace(v=1.0, key='s', name='speed'),
 )
 SELECTED = params.speed
 
@@ -39,26 +39,24 @@ CSV_PATH = Path(map_path+'_raceline.csv')
 if not CSV_PATH.exists():
     raise RuntimeError("Waypoint file doesn't exist")
 
-
 @dataclass
 class mpc_config:
     NXK: int = 4  # length of kinematic state vector: z = [x, y, v, yaw]
     NU: int = 2  # length of input vector: u = = [acceleration, delta]
     TK: int = 8  # finite time horizon length kinematic
-
     # ---------------------------------------------------
     # TODO: you may need to tune the following matrices
     Rk: npt.NDArray[Any] = field(
-        default_factory=lambda: np.diag([0.01, 100.0])
+        default_factory=lambda: np.diag([0.01, 80.0])
     )  # input cost matrix, penalty for inputs - [accel, steering]
     Rdk: npt.NDArray[Any] = field(
-        default_factory=lambda: np.diag([0.01, 100.0])
+        default_factory=lambda: np.diag([0.01, 80.0])
     )  # input difference cost matrix, penalty for change of inputs - [accel, steering]
     Qk: npt.NDArray[Any] = field(
-        default_factory=lambda: np.diag([13.5, 13.5, 5.5, 13.0])*2.0
+        default_factory=lambda: (np.diag([60.0, 60.0, 20.0, 2.0]))
     )  # state error cost matrix, for the the next (T) prediction time steps [x, y, v, yaw]
     Qfk: npt.NDArray[Any] = field(
-        default_factory=lambda: np.diag([13.5, 13.5, 5.5, 13.0])
+        default_factory=lambda: (np.diag([60.0, 60.0, 20.0, 2.0]))
     )  # final state error matrix, penalty  for the final state constraints: [x, y, v, yaw]
     # ---------------------------------------------------
 
@@ -73,7 +71,7 @@ class mpc_config:
     MAX_DSTEER: float = np.deg2rad(90)  # maximum steering speed [rad/s]
     MAX_SPEED: float = 5.0  # maximum speed [m/s]
     MIN_SPEED: float = 0.0  # minimum backward speed [m/s]
-    MAX_ACCEL: float = 2.0  # maximum acceleration [m/ss]
+    MAX_ACCEL: float = 4.0  # maximum acceleration [m/ss]
 
 @dataclass
 class State:
@@ -142,6 +140,7 @@ class MPC(Node):
         self.fd = sys.stdin.fileno()
         self.terminal_settings = termios.tcgetattr(self.fd)
         tty.setcbreak(self.fd)
+        print('Commands(Space=Stop, o=Start)')
 
     def odom_callback(self, odometry_info: Odometry):
         self.pose_callback(odometry_info)
@@ -223,6 +222,10 @@ class MPC(Node):
         Q_block.append(self.config.Qfk)
         Q_block = block_diag(tuple(Q_block))
 
+        # Previous input parameter
+        self.prev_u_k = cvxpy.Parameter((self.config.NU,))
+        self.prev_u_k = np.zeros(self.config.NU)
+
         # Objective
         traj_error_term = cvxpy.quad_form(
             cvxpy.reshape(self.xk - self.ref_traj_k, (self.config.NXK * (self.config.TK + 1),), order='F'), 
@@ -237,7 +240,10 @@ class MPC(Node):
             cvxpy.reshape(du, (self.config.NU * (self.config.TK - 1),), order='F'),
             Rd_block)
         
-        objective = traj_error_term + control_term + control_diff_term
+        prev_du = du[:, 0] - self.prev_u_k
+        prev_du_term = cvxpy.quad_form(prev_du, self.config.Rdk)
+        
+        objective = traj_error_term + control_term + control_diff_term + prev_du_term
 
         # Constraints 1: Calculate the future vehicle behavior/states based on the vehicle dynamics model matrices
         # Evaluate vehicle Dynamics for next T timesteps
