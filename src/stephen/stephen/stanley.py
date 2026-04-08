@@ -13,6 +13,7 @@ import math
 import os
 from .io_utils import Binding, DualBinding, KeyBindings
 from dataclasses import dataclass
+from .utils import quat_to_heading
 
 map_path = os.environ.get('MAP_PATH')
 if map_path is None:
@@ -32,7 +33,6 @@ config = Config()
 
 # Numeric parameters adjustable by keyboard
 params = KeyBindings(
-    speed=Binding('speed', 's', 0.0),
     lookahead=Binding('lookahead', 'l', 0.05),
     acceleration=Binding('acceleration', 'a', 0.0),
     velocities_coeff=Binding('velocities coefficient', 'v', 0.0),
@@ -81,7 +81,7 @@ class Stanley(Node):
         pose = pose_stamped.pose
         x_car_map = pose.position.x
         y_car_map = pose.position.y
-        heading_car_map = self.quaternion_to_heading(pose.orientation)
+        heading_car_map = quat_to_heading(pose.orientation)
         lookahead = (params.lookahead.v * self.speed 
                      if params.proportional_lookahead.v
                      else params.lookahead.v)
@@ -144,27 +144,6 @@ class Stanley(Node):
         ackermann_drive_result.drive.acceleration = acc
         self.pub_drive.publish(ackermann_drive_result)
 
-    def map_to_car_point(self, car_pose, map_x, map_y):
-        dx = map_x - car_pose.position.x
-        dy = map_y - car_pose.position.y
-        theta = self.quaternion_to_heading(car_pose.orientation)
-        x_car =  math.cos(theta) * dx + math.sin(theta) * dy
-        y_car = -math.sin(theta) * dx + math.cos(theta) * dy
-        return x_car, y_car
-        
-    def quaternion_to_heading(self, q):
-        siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
-        cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
-        return np.arctan2(siny_cosp, cosy_cosp)
-    
-    def heading_to_quaternion(self, yaw):
-        q = Quaternion()
-        q.x = 0.0
-        q.y = 0.0
-        q.z = math.sin(yaw / 2.0)
-        q.w = math.cos(yaw / 2.0)
-        return q
-    
     def publish_raceline(self, x, y):
         raceline = Marker()
         raceline.header.frame_id = "map"

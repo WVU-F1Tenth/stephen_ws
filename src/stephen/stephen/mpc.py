@@ -8,7 +8,6 @@ from ackermann_msgs.msg import  AckermannDriveStamped
 from rclpy.node import Node
 # from scipy.linalg import block_diag
 from scipy.sparse import block_diag, csc_matrix, diags
-from sensor_msgs.msg import LaserScan
 from .mpc_utils import nearest_point
 from numpy import typing as npt
 from typing import Any
@@ -16,22 +15,15 @@ import os
 from pathlib import Path
 from visualization_msgs.msg import Marker
 from nav_msgs.msg import Odometry
-from geometry_msgs.msg import Point, PoseStamped
+from geometry_msgs.msg import Point
 import pandas as pd
-from scipy.spatial.transform import Rotation
-import select
-import termios
-import sys
-import tty
-from types import SimpleNamespace
 from time import perf_counter
+from .utils import quat_to_heading
+from .io_utils import Binding, DualBinding, KeyBindings
 
 SIMULATOR = True
 
-params = SimpleNamespace(
-    speed=SimpleNamespace(v=1.0, key='s', name='speed'),
-)
-SELECTED = params.speed
+params = KeyBindings()
 
 map_path = os.environ.get('MAP_PATH')
 if map_path is None:
@@ -95,7 +87,7 @@ class MPC(Node):
             self.sub_odom = self.create_subscription(Odometry, '/ego_racecar/odom', self.odom_callback,  1)
         else:
             self.sub_pose = self.create_subscription(Odometry, '/pf/viz/odom', self.pose_callback, 1)
-        self.keyboard_timer = self.create_timer(.5, self.check_input)
+        self.keyboard_timer = self.create_timer(.5, params.check_input)
         self.print_timer = self.create_timer(1.0, self.print_info)
         self.mpc_solve_time = 0.0
         self.mpc_total_time = 0.0
@@ -110,22 +102,6 @@ class MPC(Node):
         self.curvatures = df.iloc[:-1, 4].to_numpy(dtype=float)
         self.ref_v = df.iloc[:-1, 5].to_numpy(dtype=float)
         self.point_count = self.ref_x.size
-        
-        # Reading CSV data
-        self.path_marker = Marker()
-        self.path_marker.header.frame_id = "map"
-        self.path_marker.id = 0
-        self.path_marker.type = Marker.POINTS
-        self.path_marker.action = Marker.ADD
-        self.path_marker.pose.orientation.w = 1.0
-        self.path_marker.scale.x = 0.1
-        self.path_marker.scale.y = 0.1
-        self.path_marker.color.a = 1.0
-        self.path_marker.color.b = 1.0
-        self.path_marker.points = [Point(x=float(x), y=float(y), z=0.0)
-                              for x, y in zip(self.ref_x, self.ref_y)]
-        self.raceline_viz.publish(self.path_marker)
-        
         # dists[0] = distance from point 0 to point 1
         self.dists = np.hypot(np.diff(waypoints_x_closed), np.diff(waypoints_y_closed))
         self.raceline_spacing = float(np.mean(self.dists))
@@ -141,10 +117,7 @@ class MPC(Node):
         # initialize MPC problem
         self.mpc_prob_init()
 
-        self.fd = sys.stdin.fileno()
-        self.terminal_settings = termios.tcgetattr(self.fd)
-        tty.setcbreak(self.fd)
-        print('Commands(Space=Stop, o=Start)')
+        self.publish_raceline(self.ref_x, self.ref_y)
 
     def odom_callback(self, odometry_info: Odometry):
         self.pose_callback(odometry_info)
@@ -158,7 +131,7 @@ class MPC(Node):
             y = pose.position.y,
             delta =self.odelta_input,
             v = twist.linear.x,
-            yaw = self.quat_to_heading(pose.orientation),
+            yaw = quat_to_heading(pose.orientation),
             yawrate = twist.angular.z,
             beta = 0.0,
         )
@@ -323,10 +296,6 @@ class MPC(Node):
         # Create the optimization problem in CVXPY and setup the workspace
         # Optimization goal: minimize the objective function
         self.MPC_prob = cvxpy.Problem(cvxpy.Minimize(objective), constraints)
-
-    def quat_to_heading(self, orientation):
-        quat = [orientation.x, orientation.y, orientation.z, orientation.w]
-        return Rotation.from_quat(quat).as_euler('xyz')[2]
 
     def calc_ref_trajectory(self, state, cx, cy, cyaw, sp):
         """
@@ -520,48 +489,26 @@ class MPC(Node):
 
         return mpc_a, mpc_delta, mpc_x, mpc_y, mpc_yaw, mpc_v, path_predict
     
-    def check_input(self):
-        global params, SELECTED
-        key = self.get_key()
-        if not key:
-            return
-        if key == ' ':
-            params.speed.v = 0.0
-            print('stopped')
-        elif key in ('i', 'o', 'j', 'k', 'n', 'm'):
-            if key == 'i':
-                SELECTED.v -= 1.0
-            elif key == 'o':
-                SELECTED.v += 1.0
-            elif key == 'j':
-                SELECTED.v -= 0.1
-            elif key == 'k':
-                SELECTED.v += 0.1
-            elif key == 'n':
-                SELECTED.v -= 0.01
-            elif key == 'm':
-                SELECTED.v += 0.01
-            print(f'{SELECTED.name} = {SELECTED.v:.2f}')
-        else:
-            for param in vars(params).values():
-                if key == param.key:
-                    if isinstance(param.v, float):
-                        SELECTED = param
-                        print(f'{param.name} selected')
-                        break
-                    elif isinstance(param.v, bool):
-                        param.v = not param.v
-
-    def get_key(self):
-        rlist, _, _ = select.select([sys.stdin], [], [], 0.005)
-        if rlist:
-            return sys.stdin.read(1)
-        return None
-
     def print_info(self):
         print(f'mpc solve time          {self.mpc_solve_time}')
         print(f'total pipeline time  {self.mpc_total_time}\n')
 
+    def publish_raceline(self, x, y):
+        raceline = Marker()
+        raceline.header.frame_id = "map"
+        raceline.id = 0
+        raceline.type = Marker.POINTS
+        raceline.action = Marker.ADD
+        raceline.pose.orientation.w = 1.0
+        raceline.scale.x = 0.1
+        raceline.scale.y = 0.1
+        raceline.color.a = 1.0
+        raceline.color.r = 0.0
+        raceline.color.g = 0.0
+        raceline.color.b = 1.0
+        raceline.points = [Point(x=float(x), y=float(y), z=0.0) for x, y in zip(x, y)]
+        self.raceline_viz.publish(raceline)
+        
 def main(args=None):
     rclpy.init(args=args)
     print("MPC Initialized")
@@ -569,6 +516,6 @@ def main(args=None):
     try:
         rclpy.spin(node)
     finally:
-        termios.tcsetattr(node.fd, termios.TCSADRAIN, node.terminal_settings)
+        params.restore_terminal()
         node.destroy_node()
         rclpy.shutdown()

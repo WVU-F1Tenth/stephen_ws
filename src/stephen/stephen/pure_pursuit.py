@@ -14,6 +14,7 @@ from .utils import threshold_index_cumulative
 from time import perf_counter
 from dataclasses import dataclass
 from .io_utils import Binding, DualBinding, KeyBindings
+from .utils import quat_to_heading, map_to_car_point
 
 map_path = os.environ.get('MAP_PATH')
 if map_path is None:
@@ -87,7 +88,7 @@ class PurePursuit(Node):
         pose = pose_stamped.pose
         x_car_map = pose.position.x
         y_car_map = pose.position.y
-        heading_car_map = self.quaternion_to_heading(pose.orientation)
+        heading_car_map = quat_to_heading(pose.orientation)
 
         # ===================================================================================
 
@@ -129,10 +130,9 @@ class PurePursuit(Node):
             self.goal_index = np.searchsorted(relative_dists, lookahead) % self.point_count
 
         # Transform goal point to vehicle frame of reference
-        x_goal_car, y_goal_car = self.map_to_car_point(
+        x_goal_car, y_goal_car = map_to_car_point(
             pose, 
-            self.waypoints_x[self.goal_index],
-            self.waypoints_y[self.goal_index])
+            (self.waypoints_x[self.goal_index], self.waypoints_y[self.goal_index]))
 
         # Calculate curvature/steering angle
         L = np.hypot(x_goal_car, y_goal_car)
@@ -163,30 +163,6 @@ class PurePursuit(Node):
         acc = 0.0 if params.acceleration.v < 0.05 else params.acceleration.v
         ackermann_drive_result.drive.acceleration = acc
         self.pub_drive.publish(ackermann_drive_result)
-
-    def map_to_car_point(self, car_pose, map_x, map_y):
-        dx = map_x - car_pose.position.x
-        dy = map_y - car_pose.position.y
-        theta = self.quaternion_to_heading(car_pose.orientation)
-        x_car =  math.cos(theta) * dx + math.sin(theta) * dy
-        y_car = -math.sin(theta) * dx + math.cos(theta) * dy
-        return x_car, y_car
-    
-    def quaternion_to_heading(self, q):
-        siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
-        cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
-        return np.arctan2(siny_cosp, cosy_cosp)
-    
-    def heading_to_quaternion(self, yaw):
-        q = Quaternion()
-        q.x = 0.0
-        q.y = 0.0
-        q.z = math.sin(yaw / 2.0)
-        q.w = math.cos(yaw / 2.0)
-        return q
-    
-    def normalize_angle(self, angle):
-        return math.atan2(math.sin(angle), math.cos(angle))
     
     def publish_raceline(self, x, y):
         raceline = Marker()
