@@ -117,7 +117,7 @@ class KeyBindings:
             return sys.stdin.read(1)
         return None
     
-    def reset_terminal(self):
+    def restore_terminal(self):
         termios.tcsetattr(self.fd, termios.TCSADRAIN, self.terminal_settings)
 
 class FileInfo:

@@ -9,7 +9,6 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 import math
-from rclpy.qos import QoSProfile, ReliabilityPolicy
 import os
 from .utils import threshold_index_cumulative
 from time import perf_counter
@@ -49,12 +48,8 @@ class PurePursuit(Node):
         self.pub_drive = self.create_publisher(AckermannDriveStamped, '/drive', 10)
         self.raceline_viz = self.create_publisher(Marker, '/viz/raceline', 10)
         self.goal_viz = self.create_publisher(Marker, '/viz/goal', 10)
-        qos = QoSProfile(
-            depth=1,
-            reliability=ReliabilityPolicy.BEST_EFFORT
-        )
         if config.simulation:
-            self.sub_odom = self.create_subscription(Odometry, '/ego_racecar/odom', self.odom_callback,  qos)
+            self.sub_odom = self.create_subscription(Odometry, '/ego_racecar/odom', self.odom_callback,  1)
         else:
             self.sub_pose = self.create_subscription(PoseStamped, '/pf/viz/inferred_pose', self.pose_callback, 1)
         self.viz_timer = self.create_timer(1.0 / config.viz_rate, self.publish_markers)
@@ -206,7 +201,8 @@ class PurePursuit(Node):
         raceline.color.r = 0.0
         raceline.color.g = 0.0
         raceline.color.b = 1.0
-        [Point(x=float(x), y=float(y), z=0.0) for x, y in zip(x, y)]
+        raceline.points = [Point(x=float(x), y=float(y), z=0.0) for x, y in zip(x, y)]
+        self.raceline_viz.publish(raceline)
 
     def publish_markers(self):
         point = Point()
@@ -235,7 +231,7 @@ def main(args=None):
     except KeyboardInterrupt:
         print('Keyboard interrupt')
     finally:
-        params.reset_terminal()
+        params.restore_terminal()
         node.destroy_node()
         rclpy.shutdown()
 

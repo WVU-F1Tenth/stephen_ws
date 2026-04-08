@@ -8,18 +8,11 @@ from visualization_msgs.msg import Marker
 import numpy as np
 import pandas as pd
 import tf2_ros
-from rclpy.duration import Duration
-from rclpy.time import Time
-from typing import Tuple
 from pathlib import Path
 import math
-from rclpy.qos import QoSProfile, ReliabilityPolicy
 import os
-import select
-import termios
-import sys
-import tty
-from types import SimpleNamespace
+from .io_utils import Binding, DualBinding, KeyBindings
+from dataclasses import dataclass
 
 map_path = os.environ.get('MAP_PATH')
 if map_path is None:
@@ -28,26 +21,26 @@ CSV_PATH = Path(map_path+'_raceline.csv')
 if not CSV_PATH.exists():
     raise RuntimeError("Waypoint file doesn't exist")
 
-SIMULATOR = False
-
-WHEELBASE = 0.33
-MAX_STEER = 0.38
-VIZ_RATE = 5.0
+@dataclass
+class Config:
+    simulation: bool = True
+    ccw: bool = True
+    wheelbase: float = 0.33
+    max_steer: float = 0.33
+    viz_rate: float = 5.0
+config = Config()
 
 # Numeric parameters adjustable by keyboard
-params = SimpleNamespace(
-    speed=SimpleNamespace(v=0.0, key='s', name='speed'),
-    lookahead=SimpleNamespace(v=0.05, key='l', name='lookahead'), # proportional ~ 0.05
-    acceleration=SimpleNamespace(v=0.0, key='a', name='acceleration'),
-    velocities_coeff=SimpleNamespace(v=0.0, key='v', name='velocities coefficient'),
-    k_error=SimpleNamespace(v=1.0, key='e', name='cross-track error gain'),
-    k_heading=SimpleNamespace(v=1.0, key='h', name='heading error gain'),
-    k_softening=SimpleNamespace(v=0.0, key=None),
-    k_damping=SimpleNamespace(v=0.0, key=None),
-    velocities_mode=SimpleNamespace(v=False, key=None),
-    proportional_lookahead=SimpleNamespace(v=False, key='p', name='velocity proportional lookahead')
-    )
-SELECTED = params.speed
+params = KeyBindings(
+    speed=Binding('speed', 's', 0.0),
+    lookahead=Binding('lookahead', 'l', 0.05),
+    acceleration=Binding('acceleration', 'a', 0.0),
+    velocities_coeff=Binding('velocities coefficient', 'v', 0.0),
+    k_error=Binding('cross-track error gain', 'e', 1.0),
+    k_heading=Binding('heading error gain', 'h', 1.0),
+    velocities_mode=DualBinding('Velocities Mode', 'v', 's', False),
+    proportional_lookahead=Binding('velocity proportional lookahead', 'p', False)
+)
 
 class Stanley(Node):
     def __init__(self):
@@ -57,39 +50,14 @@ class Stanley(Node):
         self.pub_drive = self.create_publisher(AckermannDriveStamped, '/drive', 10)
         self.raceline_viz = self.create_publisher(Marker, '/viz/raceline', 10)
         self.goal_viz = self.create_publisher(Marker, '/viz/goal', 10)
-        qos = QoSProfile(
-            depth=1,
-            reliability=ReliabilityPolicy.BEST_EFFORT
-        )
-        if SIMULATOR:
-            self.sub_odom = self.create_subscription(Odometry, '/ego_racecar/odom', self.odom_callback,  qos)
+        if config.simulation:
+            self.sub_odom = self.create_subscription(Odometry, '/ego_racecar/odom', self.odom_callback,  1)
         else:
             self.sub_pose = self.create_subscription(PoseStamped, '/pf/viz/inferred_pose', self.pose_callback, 1)
-        self.viz_timer = self.create_timer(1.0 / VIZ_RATE, self.publish_markers)
+        self.viz_timer = self.create_timer(1.0 / config.viz_rate, self.publish_markers)
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
-        self.keyboard_timer = self.create_timer(.2, self.check_input)
-
-        # Reading CSV data
-        self.path_marker = Marker()
-        self.path_marker.header.frame_id = "map"
-        self.path_marker.id = 0
-        self.path_marker.type = Marker.POINTS
-        self.path_marker.action = Marker.ADD
-        self.path_marker.pose.position.x = 0.0
-        self.path_marker.pose.position.y = 0.0
-        self.path_marker.pose.position.z = 0.0
-        self.path_marker.pose.orientation.x = 0.0
-        self.path_marker.pose.orientation.y = 0.0
-        self.path_marker.pose.orientation.z = 0.0
-        self.path_marker.pose.orientation.w = 1.0
-        self.path_marker.scale.x = 0.1
-        self.path_marker.scale.y = 0.1
-        self.path_marker.color.a = 1.0
-        self.path_marker.color.r = 0.0
-        self.path_marker.color.g = 0.0
-        self.path_marker.color.b = 1.0
-        self.path_published = False
+        self.keyboard_timer = self.create_timer(.2, params.check_input)
 
         self.angle = 0.0
         self.speed = 0.0
@@ -100,21 +68,11 @@ class Stanley(Node):
         self.waypoints_y = df.iloc[:, 2].to_numpy(dtype=float)
         self.waypoints_heading = df.iloc[:, 3].to_numpy(dtype=float)
         self.velocities = df.iloc[:, 5]
-        self.path_marker.points = [Point(x=float(x), y=float(y), z=0.0)
-                              for x, y in zip(self.waypoints_x, self.waypoints_y)]
-        
         # dists[0] = distance from point 0 to point 1
         self.dists = np.hypot(np.diff(self.waypoints_x), np.diff(self.waypoints_y))
         self.dist_sums = np.cumsum(np.append(self.dists, self.dists))
         
-        # Print key bindings
-        command_bindings = '\n'.join(
-            [f'  {param.key} = {param.name}' for param in vars(params).values() if param.key])
-        print(f'Commands:\n  space = stop\n{command_bindings}')
-
-        self.fd = sys.stdin.fileno()
-        self.terminal_settings = termios.tcgetattr(self.fd)
-        tty.setcbreak(self.fd)
+        self.publish_raceline(self.waypoints_x, self.waypoints_y)
 
     def odom_callback(self, odometry_info: Odometry):
         self.pose_callback(odometry_info.pose)
@@ -129,8 +87,8 @@ class Stanley(Node):
                      else params.lookahead.v)
 
         # Project to front axle
-        x_car_map = x_car_map + WHEELBASE * math.cos(heading_car_map)
-        y_car_map = y_car_map + WHEELBASE * math.sin(heading_car_map)
+        x_car_map = x_car_map + config.wheelbase * math.cos(heading_car_map)
+        y_car_map = y_car_map + config.wheelbase * math.sin(heading_car_map)
 
         # Find nearest point
         dx = x_car_map - self.waypoints_x
@@ -159,49 +117,17 @@ class Stanley(Node):
 
         crosstrack_error = ((x_car_map - x_goal_map) * math.sin(heading_car_map) - 
                             (y_car_map - y_goal_map) * math.cos(heading_car_map))
-        cross_track_term = math.atan2((params.k_error.v * crosstrack_error), (params.k_softening.v + self.speed))
+        cross_track_term = math.atan2((params.k_error.v * crosstrack_error), (1.0 + self.speed))
 
         delta = heading_term + cross_track_term # + yaw_damping + feedforward_term
 
         # ===================================================================================
 
-        self.angle = np.clip(delta, -MAX_STEER, MAX_STEER)
+        self.angle = np.clip(delta, -config.max_steer, config.max_steer)
 
         self.speed = self.get_speed()
 
         self.publish_drive()
-        
-    def publish_markers(self):
-        # Visualization marker for current goal point
-        point = Point()
-        goal_marker = Marker()
-        point.x = self.waypoints_x[self.goal_index]
-        point.y = self.waypoints_y[self.goal_index]
-        point.z = 0.0
-        goal_marker.points = []
-        goal_marker.points.append(point)
-        goal_marker.header.frame_id = "map"
-        goal_marker.id = 1
-        goal_marker.type = Marker.POINTS
-        goal_marker.action = Marker.ADD
-        goal_marker.pose.position.x = 0.0
-        goal_marker.pose.position.y = 0.0
-        goal_marker.pose.position.z = 0.0
-        goal_marker.pose.orientation.x = 0.0
-        goal_marker.pose.orientation.y = 0.0
-        goal_marker.pose.orientation.z = 0.0
-        goal_marker.pose.orientation.w = 1.0
-        goal_marker.scale.x = 0.2
-        goal_marker.scale.y = 0.2
-        goal_marker.color.a = 1.0
-        goal_marker.color.r = 1.0
-        goal_marker.color.g = 0.0
-        goal_marker.color.b = 0.0
-
-        if not self.path_published:
-            self.raceline_viz.publish(self.path_marker)
-            self.path_published = True
-        self.goal_viz.publish(goal_marker)
 
     def get_speed(self):
         if params.velocities_mode.v:
@@ -239,56 +165,40 @@ class Stanley(Node):
         q.w = math.cos(yaw / 2.0)
         return q
     
-    def check_input(self):
-        global params, SELECTED
-        key = self.get_key()
-        if not key:
-            return
-        if key == ' ':
-            params.speed.v = 0.0
-            params.velocities_coeff.v = 0.0
-            print('stopped')
-        elif key in ('i', 'o', 'j', 'k', 'n', 'm'):
-            if key == 'i':
-                SELECTED.v -= 1.0
-            elif key == 'o':
-                SELECTED.v += 1.0
-            elif key == 'j':
-                SELECTED.v -= 0.1
-            elif key == 'k':
-                SELECTED.v += 0.1
-            elif key == 'n':
-                SELECTED.v -= 0.01
-            elif key == 'm':
-                SELECTED.v += 0.01
-            print(f'{SELECTED.name} = {SELECTED.v:.2f}')
-        else:
-            for param in vars(params).values():
-                if key == param.key:
-                    if isinstance(param.v, float):
-                        SELECTED = param
-                        print(f'{param.name} selected')
-                        break
-                    elif isinstance(param.v, bool):
-                        if param.v:
-                            param.v = False
-                            print(f'Unset {param.name}')
-                        else:
-                            param.v = True
-                            print(f'Set {param.name}')
-            if key == 'v':
-                print('Velocities Mode')
-                params.velocities_mode.v = True
-            elif key == 's':
-                print('Manual Speed')
-                params.velocities_mode.v = False
-                
-    def get_key(self):
-        rlist, _, _ = select.select([sys.stdin], [], [], 0.005)
-        if rlist:
-            return sys.stdin.read(1)
-        return None
+    def publish_raceline(self, x, y):
+        raceline = Marker()
+        raceline.header.frame_id = "map"
+        raceline.id = 0
+        raceline.type = Marker.POINTS
+        raceline.action = Marker.ADD
+        raceline.pose.orientation.w = 1.0
+        raceline.scale.x = 0.1
+        raceline.scale.y = 0.1
+        raceline.color.a = 1.0
+        raceline.color.r = 0.0
+        raceline.color.g = 0.0
+        raceline.color.b = 1.0
+        raceline.points = [Point(x=float(x), y=float(y), z=0.0) for x, y in zip(x, y)]
+        self.raceline_viz.publish(raceline)
 
+    def publish_markers(self):
+        point = Point()
+        goal_marker = Marker()
+        point.x = self.waypoints_x[self.goal_index]
+        point.y = self.waypoints_y[self.goal_index]
+        goal_marker.points = []
+        goal_marker.points.append(point)
+        goal_marker.header.frame_id = "map"
+        goal_marker.id = 1
+        goal_marker.type = Marker.POINTS
+        goal_marker.action = Marker.ADD
+        goal_marker.pose.orientation.w = 1.0
+        goal_marker.scale.x = 0.2
+        goal_marker.scale.y = 0.2
+        goal_marker.color.a = 1.0
+        goal_marker.color.r = 1.0
+        self.goal_viz.publish(goal_marker)
+    
 def main(args=None):
     rclpy.init(args=args)
     print("Stanley Initialized")
@@ -298,7 +208,7 @@ def main(args=None):
     except KeyboardInterrupt:
         print('Keyboard interrupt')
     finally:
-        termios.tcsetattr(node.fd, termios.TCSADRAIN, node.terminal_settings)
+        params.restore_terminal()
         node.destroy_node()
         rclpy.shutdown()
 
