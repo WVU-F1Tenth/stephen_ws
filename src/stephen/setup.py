@@ -28,6 +28,7 @@ setup(
             'pure_pursuit=stephen.pure_pursuit:main',
             'stanley=stephen.stanley:main',
             'mpc=stephen.mpc:main',
+            'dynamic_mpc=stephen.dynamic_mpc:main',
         ],
     },
 )

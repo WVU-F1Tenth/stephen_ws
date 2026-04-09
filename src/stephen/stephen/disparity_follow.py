@@ -105,7 +105,9 @@ class DisparityFollow(Node):
 
             # self.apply_range_limit(ranges, 10.0)
 
+            get_virtual_start = perf_counter()
             self.virtual = get_virtual(self.ranges, self.scan.increment, params.map_extension.v)
+            self.get_virtual_time = (perf_counter() - get_virtual_start) * 1_000
 
             pos_disps, neg_disps = self.disparities(self.ranges)
 
@@ -133,7 +135,8 @@ class DisparityFollow(Node):
         self.publish_markers()
 
     def print_info(self):
-        print(f'{self.pipeline_time:.2f} ms')
+        print(f'{self.pipeline_time = :.2f} ms')
+        print(f'{self.get_virtual_time = :.2f} ms\n')
 
     def publish_drive(self, velocity, acceleration, steering_angle, steering_velocity):
         drive_msg = AckermannDriveStamped()
