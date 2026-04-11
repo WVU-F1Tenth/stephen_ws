@@ -38,7 +38,6 @@ class mpc_config:
     NU: int = 2  # length of input vector: u = = [acceleration, delta]
     TK: int = 8  # finite time horizon length kinematic
     # ---------------------------------------------------
-    # TODO: you may need to tune the following matrices
     Rk: npt.NDArray[Any] = field(
         default_factory=lambda: np.diag([0.01, 80.0])
     )  # input cost matrix, penalty for inputs - [accel, steering]
@@ -139,7 +138,6 @@ class MPC(Node):
         ref_path = self.calc_ref_trajectory(vehicle_state, self.ref_x, self.ref_y, self.ref_yaw, self.ref_v)
         x0 = [vehicle_state.x, vehicle_state.y, vehicle_state.v, vehicle_state.yaw]
 
-        # TODO: solve the MPC control problem
         (
             self.oa,
             self.odelta,
@@ -150,10 +148,10 @@ class MPC(Node):
             state_predict,
         ) = self.linear_mpc_control(ref_path, x0, self.oa, self.odelta)
         
-        self.ovel_input = np.clip(vehicle_state.v + self.oa[0] * self.config.DTK,
+        self.ovel_input = np.clip(vehicle_state.v + self.oa[0] * self.config.DTK, # type: ignore
                             self.config.MIN_SPEED,
                             self.config.MAX_SPEED)
-        self.odelta_input = np.clip(self.odelta[0],
+        self.odelta_input = np.clip(self.odelta[0], # type: ignore
                             self.config.MIN_STEER,
                             self.config.MAX_STEER)
         ackermann_drive_result = AckermannDriveStamped()

@@ -13,7 +13,8 @@ import math
 import os
 from .io_utils import Binding, DualBinding, KeyBindings
 from dataclasses import dataclass
-from .utils import quat_to_heading
+from .utils import quat_to_heading, nearest_spline_sample
+from scipy.interpolate import splprep, splev
 
 map_path = os.environ.get('MAP_PATH')
 if map_path is None:
@@ -29,6 +30,7 @@ class Config:
     wheelbase: float = 0.33
     max_steer: float = 0.33
     viz_rate: float = 5.0
+    use_spline: bool = True
 config = Config()
 
 # Numeric parameters adjustable by keyboard
@@ -36,8 +38,8 @@ params = KeyBindings(
     lookahead=Binding('lookahead', 'l', 0.05),
     acceleration=Binding('acceleration', 'a', 0.0),
     velocities_coeff=Binding('velocities coefficient', 'v', 0.0),
-    k_error=Binding('cross-track error gain', 'e', 1.0),
-    k_heading=Binding('heading error gain', 'h', 1.0),
+    k_error=Binding('cross-track error gain', 'e', 0.5),
+    k_heading=Binding('heading error gain', 'h', 0.6),
     velocities_mode=DualBinding('Velocities Mode', 'v', 's', False),
     proportional_lookahead=Binding('velocity proportional lookahead', 'p', False)
 )
@@ -71,6 +73,8 @@ class Stanley(Node):
         # dists[0] = distance from point 0 to point 1
         self.dists = np.hypot(np.diff(self.waypoints_x), np.diff(self.waypoints_y))
         self.dist_sums = np.cumsum(np.append(self.dists, self.dists))
+        u, self.tck = splprep((self.waypoints_x, self.waypoints_y))
+        self.u_max = u[-1]
         
         self.publish_raceline(self.waypoints_x, self.waypoints_y)
 
@@ -89,21 +93,27 @@ class Stanley(Node):
         # Project to front axle
         x_car_map = x_car_map + config.wheelbase * math.cos(heading_car_map)
         y_car_map = y_car_map + config.wheelbase * math.sin(heading_car_map)
-
-        # Find nearest point
-        dx = x_car_map - self.waypoints_x
-        dy = y_car_map - self.waypoints_y
-        d = np.hypot(dx, dy)
-        self.nearest_index = np.argmin(d)
         
         # Find goal point (arc length lookahead)
-        relative_dists = self.dist_sums - self.dist_sums[self.nearest_index]
-        self.goal_index = np.searchsorted(relative_dists, lookahead) % d.size
-        
-        # Get goal index params
-        goal_index = self.goal_index
-        x_goal_map, y_goal_map = self.waypoints_x[goal_index], self.waypoints_y[goal_index]
-        heading_goal_map = self.waypoints_heading[goal_index]
+        if config.use_spline:
+            # Find nearest point
+            nearest_theta = nearest_spline_sample(self.tck, self.u_max, (x_car_map, y_car_map))
+            goal_theta = (nearest_theta + params.lookahead.v) % self.u_max
+            self.goal_point = splev((goal_theta), self.tck)[0]
+            x_goal_map, y_goal_map = self.goal_point
+            heading_goal_map = splev((goal_theta), self.tck, der=1)[0]
+        else:
+            # Find nearest point
+            dx = x_car_map - self.waypoints_x
+            dy = y_car_map - self.waypoints_y
+            d = np.hypot(dx, dy)
+            self.nearest_index = np.argmin(d)
+            relative_dists = self.dist_sums - self.dist_sums[self.nearest_index]
+            self.goal_index = np.searchsorted(relative_dists, lookahead) % d.size
+            # Get goal index params
+            goal_index = self.goal_index
+            x_goal_map, y_goal_map = self.waypoints_x[goal_index], self.waypoints_y[goal_index]
+            heading_goal_map = self.waypoints_heading[goal_index]
 
         # ===================================================================================
 

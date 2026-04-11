@@ -3,6 +3,9 @@ from scipy.spatial.transform import Rotation
 from geometry_msgs.msg import Quaternion, Pose
 import math
 from typing import Tuple
+import numpy as np
+from scipy.interpolate import splev, splprep
+from scipy.optimize import minimize_scalar
 
 @njit
 def threshold_index_cumulative(ar, start_index, threshold):
@@ -62,3 +65,34 @@ def map_to_car_point(car_pose: Pose, map_point: Tuple[float, float]):
     x_car =  math.cos(theta) * dx + math.sin(theta) * dy
     y_car = -math.sin(theta) * dx + math.cos(theta) * dy
     return x_car, y_car
+
+
+def nearest_spline_sample(tck, point, levels=3, n=100):
+    """
+    Returns spline progress closest to x, y
+    """
+    u1_min = 0
+    u1_max = n//2
+    u2_min = n//2 + 1
+    u2_max = n-1
+    point = np.asarray(point)
+    for level in range(levels):
+        sample_space1 = np.linspace(u1_min, u1_max, n//2)
+        sample_space2 = np.linspace(u2_min, u2_max, n//2)
+        u = splev(np.concatenate((sample_space1, sample_space2)), tck)
+        diff =  u - point
+        err = np.hypot(diff[:, 0], diff[:, 1])
+        # err = diff[:, 0]**2 + diff[:, 1]**2
+        closest = np.argmin(err)
+        u1_min = closest - 1 if closest != 0 else n - 1
+        u1_max = closest if closest != 0 else n
+        u2_min = closest
+        u2_max = closest + 1
+    return closest
+
+
+def nearest_spline_point(tck, umax, point):
+    """
+    Returns spline progress closest to x, y
+    """
+    pass

@@ -20,6 +20,7 @@ import pandas as pd
 from time import perf_counter
 from .utils import quat_to_heading
 from .io_utils import Binding, DualBinding, KeyBindings
+from .utils import threshold_index_cumulative
 
 SIMULATOR = True
 
@@ -34,11 +35,10 @@ if not CSV_PATH.exists():
 
 @dataclass
 class mpc_config:
-    NXK: int = 4  # length of kinematic state vector: z = [x, y, v, yaw]
+    NXK: int = 5  # length of kinematic state vector: z = [x, y, v, yaw]
     NU: int = 2  # length of input vector: u = = [acceleration, delta]
     TK: int = 8  # finite time horizon length kinematic
     # ---------------------------------------------------
-    # TODO: you may need to tune the following matrices
     Rk: npt.NDArray[Any] = field(
         default_factory=lambda: np.diag([0.01, 80.0])
     )  # input cost matrix, penalty for inputs - [accel, steering]
@@ -46,10 +46,10 @@ class mpc_config:
         default_factory=lambda: np.diag([0.01, 80.0])
     )  # input difference cost matrix, penalty for change of inputs - [accel, steering]
     Qk: npt.NDArray[Any] = field(
-        default_factory=lambda: (np.diag([60.0, 60.0, 20.0, 2.0]))
+        default_factory=lambda: (np.diag([60.0, 60.0, 20.0, 2.0, 20.0]))
     )  # state error cost matrix, for the the next (T) prediction time steps [x, y, v, yaw]
     Qfk: npt.NDArray[Any] = field(
-        default_factory=lambda: (np.diag([60.0, 60.0, 20.0, 2.0]))
+        default_factory=lambda: (np.diag([60.0, 60.0, 20.0, 2.0, 20.0]))
     )  # final state error matrix, penalty  for the final state constraints: [x, y, v, yaw]
     # ---------------------------------------------------
 
@@ -59,7 +59,6 @@ class mpc_config:
     LENGTH: float = 0.58  # Length of the vehicle [m]
     WIDTH: float = 0.31  # Width of the vehicle [m]
     WB: float = 0.33  # Wheelbase [m]
-    MIN_STEER: float = -0.4  # minimum steering angle [rad]
     MAX_STEER: float = 0.4  # maximum steering angle [rad]
     MAX_DSTEER: float = np.deg2rad(90)  # maximum steering speed [rad/s]
     MAX_SPEED: float = 6.0  # maximum speed [m/s]
@@ -87,7 +86,7 @@ class MPC(Node):
             self.sub_odom = self.create_subscription(Odometry, '/ego_racecar/odom', self.odom_callback,  1)
         else:
             self.sub_pose = self.create_subscription(Odometry, '/pf/viz/odom', self.pose_callback, 1)
-        self.keyboard_timer = self.create_timer(.5, params.check_input)
+        self.keyboard_timer = self.create_timer(.3, params.check_input)
         self.print_timer = self.create_timer(1.0, self.print_info)
         self.mpc_solve_time = 0.0
         self.mpc_total_time = 0.0
@@ -104,12 +103,14 @@ class MPC(Node):
         self.point_count = self.ref_x.size
         # dists[0] = distance from point 0 to point 1
         self.dists = np.hypot(np.diff(waypoints_x_closed), np.diff(waypoints_y_closed))
-        self.raceline_spacing = float(np.mean(self.dists))
+        self.max_theta = np.sum(self.dists)
+        self.start_index = None
 
         self.config = mpc_config()
-        self.config.dlk = self.raceline_spacing
+        self.config.dlk = float(np.mean(self.dists))
         self.odelta = [0.0] * self.config.TK
         self.oa = [0.0] * self.config.TK
+        self.otheta = [0.0] * self.config.TK
         self.odelta_input = 0.0
         self.ovel_input = 0.0
         self.init_flag = 0
@@ -136,10 +137,11 @@ class MPC(Node):
             beta = 0.0,
         )
 
-        ref_path = self.calc_ref_trajectory(vehicle_state, self.ref_x, self.ref_y, self.ref_yaw, self.ref_v)
+        # ref_path = self.calc_ref_trajectory(vehicle_state, self.ref_x, self.ref_y, self.ref_yaw, self.ref_v)
         x0 = [vehicle_state.x, vehicle_state.y, vehicle_state.v, vehicle_state.yaw]
 
-        # TODO: solve the MPC control problem
+        self.start_index = self.nearest_point(self.ref_x, self.ref_y, vehicle_state.x, vehicle_state.y)
+
         (
             self.oa,
             self.odelta,
@@ -147,14 +149,15 @@ class MPC(Node):
             oy,
             oyaw,
             ov,
+            otheta,
             state_predict,
-        ) = self.linear_mpc_control(ref_path, x0, self.oa, self.odelta)
+        ) = self.linear_mpc_control(x0, self.oa, self.odelta, self.otheta)
         
-        self.ovel_input = np.clip(vehicle_state.v + self.oa[0] * self.config.DTK,
+        self.ovel_input = np.clip(vehicle_state.v + self.oa[0] * self.config.DTK, # type: ignore
                             self.config.MIN_SPEED,
                             self.config.MAX_SPEED)
-        self.odelta_input = np.clip(self.odelta[0],
-                            self.config.MIN_STEER,
+        self.odelta_input = np.clip(self.odelta[0], # type: ignore
+                            -self.config.MAX_STEER,
                             self.config.MAX_STEER)
         ackermann_drive_result = AckermannDriveStamped()
         ackermann_drive_result.header.stamp = self.get_clock().now().to_msg()
@@ -163,6 +166,18 @@ class MPC(Node):
         ackermann_drive_result.drive.speed = vel_input
         self.pub_drive.publish(ackermann_drive_result)
         self.mpc_total_time = perf_counter() - self.mpc_total_time_start
+
+    def nearest_point(self, path_x, path_y, point_x, point_y):
+        dx = path_x - point_x
+        dy = path_y - point_y
+        dist = np.hypot(dx, dy)
+        return np.argmin(dist)
+    
+    def theta_xy(self, theta):
+        if theta > self.max_theta:
+            raise ValueError('Theta out of bounds')
+        idx = threshold_index_cumulative(self.dists, self.start_index, theta)
+        return self.ref_y[idx], self.ref_y[idx]
 
     def mpc_prob_init(self):
         """
@@ -466,7 +481,7 @@ class MPC(Node):
 
         return oa, odelta, ox, oy, oyaw, ov
 
-    def linear_mpc_control(self, ref_path, x0, oa, od):
+    def linear_mpc_control(self, ref_path, x0, oa, od, otheta):
         """
         MPC contorl with updating operational point iteraitvely
         :param ref_path: reference trajectory in T steps
@@ -475,22 +490,14 @@ class MPC(Node):
         :param od: delta of T steps of last time
         """
 
-        if oa is None or od is None:
-            oa = [0.0] * self.config.TK
-            od = [0.0] * self.config.TK
-
         # Call the Motion Prediction function: Predict the vehicle motion for x-steps
-        path_predict = self.predict_motion(x0, oa, od, ref_path)
-        poa, pod = oa[:], od[:]
+        # path_predict = self.predict_motion(x0, oa, od, otheta, ref_path)
 
         # Run the MPC optimization: Create and solve the optimization problem
         mpc_a, mpc_delta, mpc_x, mpc_y, mpc_yaw, mpc_v = self.mpc_prob_solve(
             ref_path, path_predict, x0, oa, od)
 
         return mpc_a, mpc_delta, mpc_x, mpc_y, mpc_yaw, mpc_v, path_predict
-    
-    def theta_xy(self, theta):
-        cum_sum = self.cum_dists
     
     def print_info(self):
         print(f'mpc solve time          {self.mpc_solve_time}')
