@@ -66,33 +66,65 @@ def map_to_car_point(car_pose: Pose, map_point: Tuple[float, float]):
     y_car = -math.sin(theta) * dx + math.cos(theta) * dy
     return x_car, y_car
 
+class RacelineSpline:
+    def __init__(self, xref, yref, smooth=0.0, n_dense=5000, dtype=np.float64):
+        self.dtype = dtype
+        self.tck, self.u = splprep([xref, yref], per=1, s=smooth)
+        self.u0, self.u1 = self.u[0], self.u[-1]
+        # TODO: check if this is always 0 to 1
+        self.u_period = self.u1 - self.u0
+        self.u_dense = np.linspace(self.u0, self.u1, n_dense, endpoint=False, dtype=self.dtype)
+        x_dense, y_dense = splev(self.u_dense, self.tck)
+        self.xy_dense = np.column_stack([x_dense, y_dense])
+        dx = np.diff(x_dense, append=x_dense[0])
+        dy = np.diff(y_dense, append=y_dense[0])
+        ds = np.hypot(dx, dy)
+        self.s_dense = np.empty(n_dense, dtype=self.dtype)
+        self.s_dense[0] = 0.0
+        self.s_dense[1:] = np.cumsum(ds[:-1])
+        self.length = ds.sum()
 
-def nearest_spline_sample(tck, point, levels=3, n=100):
-    """
-    Returns spline progress closest to x, y
-    """
-    u1_min = 0
-    u1_max = n//2
-    u2_min = n//2 + 1
-    u2_max = n-1
-    point = np.asarray(point)
-    for level in range(levels):
-        sample_space1 = np.linspace(u1_min, u1_max, n//2)
-        sample_space2 = np.linspace(u2_min, u2_max, n//2)
-        u = splev(np.concatenate((sample_space1, sample_space2)), tck)
-        diff =  u - point
-        err = np.hypot(diff[:, 0], diff[:, 1])
-        # err = diff[:, 0]**2 + diff[:, 1]**2
-        closest = np.argmin(err)
-        u1_min = closest - 1 if closest != 0 else n - 1
-        u1_max = closest if closest != 0 else n
-        u2_min = closest
-        u2_max = closest + 1
-    return closest
+    def wrap_u(self, u):
+        return self.u0 + ((np.asarray(u) - self.u0) % self.u_period)
+    
+    def s_to_u(self, s):
+        s = np.asarray(s) % self.length
+        return np.interp(s, self.s_dense, self.u_dense)
+    
+    def u_to_s(self, u):
+        u = self.wrap_u(u)
+        return np.interp(u, self.u_dense, self.s_dense)
+    
+    def s_to_xy(self, s):
+        uu = self.s_to_u(s)
+        x, y = splev(uu, self.tck)
+        return x, y
+    
+    def s_to_heading(self, s):
+        uu = self.s_to_u(s)
+        dx_du, dy_du = splev(uu, self.tck, der=1)
+        return np.arctan2(dy_du, dx_du)
 
+    def xy_to_s(self, point, levels=2, n=50):
+        """
+        Returns spline progress closest to x, y
+        """
+        point = np.asarray(point, dtype=self.dtype)
+        diff = self.xy_dense - point
+        idx0 = np.argmin(np.sum(diff * diff, axis=1))
+        best_u = self.u_dense[idx0]
+        du = self.u_period / len(self.u_dense)
+        for _ in range(levels):
+            samples = best_u + np.linspace(-du, du, n, dtype=self.dtype)
+            samples = self.wrap_u(samples)
+            xy = np.asarray(splev(samples, self.tck), dtype=self.dtype).T
+            err = np.sum((xy - point) ** 2, axis=1)
+            idx = np.argmin(err)
+            best_u = samples[idx]
+            du *= 0.5
+        return self.u_to_s(best_u)
+    
+    def nearest_xy(self, point):
+        return self.s_to_xy(self.xy_to_s(point))
 
-def nearest_spline_point(tck, umax, point):
-    """
-    Returns spline progress closest to x, y
-    """
-    pass
+        
