@@ -63,23 +63,23 @@ class PurePursuit(Node):
         
         # Track attribues
         df = pd.read_csv(CSV_PATH, header=0, comment='#', sep=';')
-        waypoints_x_closed = df.iloc[:, 1].to_numpy(dtype=float)
-        self.waypoints_x = waypoints_x_closed[:-1]
-        waypoints_y_closed = df.iloc[:, 2].to_numpy(dtype=float)
-        self.waypoints_y = waypoints_y_closed[:-1]
-        self.waypoints_heading = df.iloc[:-1, 3].to_numpy(dtype=float)
+        x_ref_closed = df.iloc[:, 1].to_numpy(dtype=float)
+        self.x_ref = x_ref_closed[:-1]
+        y_ref_closed = df.iloc[:, 2].to_numpy(dtype=float)
+        self.y_ref = y_ref_closed[:-1]
+        self.yaw_ref = df.iloc[:-1, 3].to_numpy(dtype=float)
         self.curvatures = df.iloc[:-1, 4].to_numpy(dtype=float)
         self.velocities = df.iloc[:-1, 5].to_numpy(dtype=float)
-        self.point_count = self.waypoints_x.size
+        self.point_count = self.x_ref.size
         # dists[0] = distance from point 0 to point 1
-        self.dists = np.hypot(np.diff(waypoints_x_closed), np.diff(waypoints_y_closed))
+        self.dists = np.hypot(np.diff(x_ref_closed), np.diff(y_ref_closed))
         self.raceline_spacing = np.mean(self.dists)
         # Cumulative distances
         self.dist_sums = np.cumsum(np.append(self.dists, self.dists))
         # Curvature
         self.abs_weighted_curvatures = np.abs(self.curvatures * self.raceline_spacing)
 
-        self.publish_raceline(self.waypoints_x, self.waypoints_y)
+        self.publish_raceline(self.x_ref, self.y_ref)
 
     def odom_callback(self, odometry_info: Odometry):
         self.pose_callback(odometry_info.pose)
@@ -93,8 +93,8 @@ class PurePursuit(Node):
         # ===================================================================================
 
         # Find nearest point
-        dx = x_car_map - self.waypoints_x
-        dy = y_car_map - self.waypoints_y
+        dx = x_car_map - self.x_ref
+        dy = y_car_map - self.y_ref
         d = np.hypot(dx, dy)
         self.nearest_index = np.argmin(d)
 
@@ -132,7 +132,7 @@ class PurePursuit(Node):
         # Transform goal point to vehicle frame of reference
         x_goal_car, y_goal_car = map_to_car_point(
             pose, 
-            (self.waypoints_x[self.goal_index], self.waypoints_y[self.goal_index]))
+            (self.x_ref[self.goal_index], self.y_ref[self.goal_index]))
 
         # Calculate curvature/steering angle
         L = np.hypot(x_goal_car, y_goal_car)
@@ -183,8 +183,8 @@ class PurePursuit(Node):
     def publish_markers(self):
         point = Point()
         goal_marker = Marker()
-        point.x = self.waypoints_x[self.goal_index]
-        point.y = self.waypoints_y[self.goal_index]
+        point.x = self.x_ref[self.goal_index]
+        point.y = self.y_ref[self.goal_index]
         goal_marker.points = []
         goal_marker.points.append(point)
         goal_marker.header.frame_id = "map"

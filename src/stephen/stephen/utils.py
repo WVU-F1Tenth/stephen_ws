@@ -6,6 +6,7 @@ from typing import Tuple
 import numpy as np
 from scipy.interpolate import splev, splprep
 from scipy.optimize import minimize_scalar
+from typing import Tuple
 
 @njit
 def threshold_index_cumulative(ar, start_index, threshold):
@@ -95,15 +96,15 @@ class RacelineSpline:
         u = self.wrap_u(u)
         return np.interp(u, self.u_dense, self.s_dense)
     
-    def s_to_xy(self, s):
+    def s_to_xy(self, s) -> Tuple[float, float]:
         uu = self.s_to_u(s)
         x, y = splev(uu, self.tck)
-        return x, y
+        return (float(x), float(y)) # type: ignore
     
     def s_to_heading(self, s):
         uu = self.s_to_u(s)
         dx_du, dy_du = splev(uu, self.tck, der=1)
-        return np.arctan2(dy_du, dx_du)
+        return -np.arctan2(dx_du, dy_du)
 
     def xy_to_s(self, point, levels=2, n=50):
         """

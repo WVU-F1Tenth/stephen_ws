@@ -13,7 +13,7 @@ import math
 import os
 from .io_utils import Binding, DualBinding, KeyBindings
 from dataclasses import dataclass
-from .utils import quat_to_heading, nearest_spline_sample
+from .utils import quat_to_heading, RacelineSpline
 from scipy.interpolate import splprep, splev
 
 map_path = os.environ.get('MAP_PATH')
@@ -63,20 +63,22 @@ class Stanley(Node):
 
         self.angle = 0.0
         self.speed = 0.0
-        self.goal_index = 0
         
         df = pd.read_csv(CSV_PATH, header=0, comment='#', sep=';')
-        self.waypoints_x = df.iloc[:, 1].to_numpy(dtype=float)
-        self.waypoints_y = df.iloc[:, 2].to_numpy(dtype=float)
-        self.waypoints_heading = df.iloc[:, 3].to_numpy(dtype=float)
+        self.x_ref = df.iloc[:, 1].to_numpy(dtype=float)
+        self.y_ref = df.iloc[:, 2].to_numpy(dtype=float)
+        self.yaw_ref = df.iloc[:, 3].to_numpy(dtype=float)
         self.velocities = df.iloc[:, 5]
         # dists[0] = distance from point 0 to point 1
-        self.dists = np.hypot(np.diff(self.waypoints_x), np.diff(self.waypoints_y))
+        self.dists = np.hypot(np.diff(self.x_ref), np.diff(self.y_ref))
         self.dist_sums = np.cumsum(np.append(self.dists, self.dists))
-        u, self.tck = splprep((self.waypoints_x, self.waypoints_y))
+        u, self.tck = splprep((self.x_ref, self.y_ref))
         self.u_max = u[-1]
+
+        if config.use_spline:
+            self.raceline_spline = RacelineSpline(self.x_ref, self.y_ref)
         
-        self.publish_raceline(self.waypoints_x, self.waypoints_y)
+        self.publish_raceline(self.x_ref, self.y_ref)
 
     def odom_callback(self, odometry_info: Odometry):
         self.pose_callback(odometry_info.pose)
@@ -97,23 +99,25 @@ class Stanley(Node):
         # Find goal point (arc length lookahead)
         if config.use_spline:
             # Find nearest point
-            nearest_theta = nearest_spline_sample(self.tck, self.u_max, (x_car_map, y_car_map))
-            goal_theta = (nearest_theta + params.lookahead.v) % self.u_max
-            self.goal_point = splev((goal_theta), self.tck)[0]
-            x_goal_map, y_goal_map = self.goal_point
-            heading_goal_map = splev((goal_theta), self.tck, der=1)[0]
+            nearest_s = self.raceline_spline.xy_to_s([x_car_map, y_car_map])
+            goal_s = nearest_s + params.lookahead.v
+            x_goal_map, y_goal_map = self.raceline_spline.s_to_xy(goal_s)
+            heading_goal_map = self.raceline_spline.s_to_heading(goal_s)
+            self.goal = (x_goal_map, y_goal_map)
+            self.v_ref = 5.0
         else:
             # Find nearest point
-            dx = x_car_map - self.waypoints_x
-            dy = y_car_map - self.waypoints_y
+            dx = x_car_map - self.x_ref
+            dy = y_car_map - self.y_ref
             d = np.hypot(dx, dy)
             self.nearest_index = np.argmin(d)
             relative_dists = self.dist_sums - self.dist_sums[self.nearest_index]
-            self.goal_index = np.searchsorted(relative_dists, lookahead) % d.size
+            goal_index = np.searchsorted(relative_dists, lookahead) % d.size
             # Get goal index params
-            goal_index = self.goal_index
-            x_goal_map, y_goal_map = self.waypoints_x[goal_index], self.waypoints_y[goal_index]
-            heading_goal_map = self.waypoints_heading[goal_index]
+            x_goal_map, y_goal_map = self.x_ref[goal_index], self.y_ref[goal_index]
+            heading_goal_map = self.yaw_ref[goal_index]
+            self.v_ref = self.velocities[goal_index]
+            self.goal = self.x_ref[goal_index], self.y_ref[goal_index]
 
         # ===================================================================================
 
@@ -141,7 +145,7 @@ class Stanley(Node):
 
     def get_speed(self):
         if params.velocities_mode.v:
-            return params.velocities_coeff.v * self.velocities[self.goal_index]
+            return params.velocities_coeff.v * self.v_ref
         else:
             return params.speed.v
         
@@ -173,8 +177,8 @@ class Stanley(Node):
     def publish_markers(self):
         point = Point()
         goal_marker = Marker()
-        point.x = self.waypoints_x[self.goal_index]
-        point.y = self.waypoints_y[self.goal_index]
+        point.x = self.goal[0]
+        point.y = self.goal[1]
         goal_marker.points = []
         goal_marker.points.append(point)
         goal_marker.header.frame_id = "map"
