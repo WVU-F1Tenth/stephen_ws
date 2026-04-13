@@ -43,6 +43,7 @@ sudo apt install -y python3-colcon-common-extensions
 
 sudo apt install -y python3-bloom python3-rosdep fakeroot debhelper dh-python
 
+sudo rm -f /etc/ros/rosdep/sources.list.d/20-default.list
 sudo rosdep init
 rosdep update --include-eol-distros
 
