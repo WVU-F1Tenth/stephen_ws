@@ -15,6 +15,7 @@ from .io_utils import Binding, DualBinding, KeyBindings
 from dataclasses import dataclass
 from .utils import quat_to_heading, RacelineSpline
 from scipy.interpolate import splprep, splev
+from time import perf_counter
 
 map_path = os.environ.get('MAP_PATH')
 if map_path is None:
@@ -30,7 +31,7 @@ class Config:
     wheelbase: float = 0.33
     max_steer: float = 0.33
     viz_rate: float = 5.0
-    use_spline: bool = True
+    use_spline: bool = False
 config = Config()
 
 # Numeric parameters adjustable by keyboard
@@ -60,6 +61,7 @@ class Stanley(Node):
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
         self.keyboard_timer = self.create_timer(.2, params.check_input)
+        self.print_timer = self.create_timer(1.0, self.print_info)
 
         self.angle = 0.0
         self.speed = 0.0
@@ -80,6 +82,9 @@ class Stanley(Node):
         
         self.publish_raceline(self.x_ref, self.y_ref)
 
+    def print_info(self):
+        print(f'raceline conversion time = {self.race_conv_time}')
+
     def odom_callback(self, odometry_info: Odometry):
         self.pose_callback(odometry_info.pose)
 
@@ -88,7 +93,7 @@ class Stanley(Node):
         x_car_map = pose.position.x
         y_car_map = pose.position.y
         heading_car_map = quat_to_heading(pose.orientation)
-        lookahead = (params.lookahead.v * self.speed 
+        lookahead = (params.lookahead.v * self.speed
                      if params.proportional_lookahead.v
                      else params.lookahead.v)
 
@@ -99,14 +104,17 @@ class Stanley(Node):
         # Find goal point (arc length lookahead)
         if config.use_spline:
             # Find nearest point
+            race_conv_start = perf_counter()
             nearest_s = self.raceline_spline.xy_to_s([x_car_map, y_car_map])
             goal_s = nearest_s + params.lookahead.v
             x_goal_map, y_goal_map = self.raceline_spline.s_to_xy(goal_s)
             heading_goal_map = self.raceline_spline.s_to_heading(goal_s)
             self.goal = (x_goal_map, y_goal_map)
             self.v_ref = 5.0
+            self.race_conv_time = perf_counter() - race_conv_start
         else:
             # Find nearest point
+            race_conv_start = perf_counter()
             dx = x_car_map - self.x_ref
             dy = y_car_map - self.y_ref
             d = np.hypot(dx, dy)
@@ -118,6 +126,7 @@ class Stanley(Node):
             heading_goal_map = self.yaw_ref[goal_index]
             self.v_ref = self.velocities[goal_index]
             self.goal = self.x_ref[goal_index], self.y_ref[goal_index]
+            self.race_conv_time = perf_counter() - race_conv_start
 
         # ===================================================================================
 

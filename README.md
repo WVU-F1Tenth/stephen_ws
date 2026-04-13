@@ -26,14 +26,14 @@ alias f1tenth="cd $HOME/f1tenth_ws/; source install/setup.bash; ros2 launch f1te
 sudo apt install python3-venv
 python3 -m venv .venv
 source .venv/bin/activate
-pip install --upgrade pip setuptools wheel
+pip install --upgrade 'pip<24.1' setuptools wheel
 pip install -r requirements.txt
 ```
 > colcon build must be done in venv
 
 # To activate venv
 ```bash
-source ./venv/bin/activate
+source .venv/bin/activate
 source install/setup.bash
 ```
 
