@@ -13,7 +13,7 @@ echo 'Cancelling...'
 return 1
 fi
 
-set -euo pipefail
+set -eo pipefail
 
 echo 'Installing f1tenth_gym'
 
