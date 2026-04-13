@@ -3,7 +3,7 @@
 
 # ROS2 build artifacts
 build/
-install/
+/install/
 log/
 src/stephen/test
 
