@@ -13,7 +13,7 @@ import math
 import os
 from .io_utils import Binding, DualBinding, KeyBindings
 from dataclasses import dataclass
-from .utils import quat_to_heading, RacelineSpline
+from .utils import quat_to_heading, RacelineSpline, Raceline
 from scipy.interpolate import splprep, splev
 from time import perf_counter
 
@@ -67,10 +67,14 @@ class Stanley(Node):
         self.speed = 0.0
         
         df = pd.read_csv(CSV_PATH, header=0, comment='#', sep=';')
-        self.x_ref = df.iloc[:, 1].to_numpy(dtype=float)
-        self.y_ref = df.iloc[:, 2].to_numpy(dtype=float)
-        self.yaw_ref = df.iloc[:, 3].to_numpy(dtype=float)
-        self.velocities = df.iloc[:, 5]
+        track = Raceline(df)
+        if not config.ccw:
+            track.reverse()
+            
+        self.x_ref = track.x_ref
+        self.y_ref = track.y_ref
+        self.yaw_ref = track.yaw_ref
+        self.velocities = track.v_ref
         # dists[0] = distance from point 0 to point 1
         self.dists = np.hypot(np.diff(self.x_ref), np.diff(self.y_ref))
         self.dist_sums = np.cumsum(np.append(self.dists, self.dists))

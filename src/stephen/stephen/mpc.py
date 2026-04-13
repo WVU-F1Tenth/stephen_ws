@@ -150,10 +150,10 @@ class MPC(Node):
             state_predict,
         ) = self.linear_mpc_control(ref_path, x0, self.oa, self.odelta)
         
-        self.ovel_input = np.clip(vehicle_state.v + self.oa[0] * self.config.DTK,
+        self.ovel_input = np.clip(vehicle_state.v + self.oa[0] * self.config.DTK, # type: ignore
                             self.config.MIN_SPEED,
                             self.config.MAX_SPEED)
-        self.odelta_input = np.clip(self.odelta[0],
+        self.odelta_input = np.clip(self.odelta[0], # type: ignore
                             self.config.MIN_STEER,
                             self.config.MAX_STEER)
         ackermann_drive_result = AckermannDriveStamped()
@@ -488,9 +488,6 @@ class MPC(Node):
             ref_path, path_predict, x0, oa, od)
 
         return mpc_a, mpc_delta, mpc_x, mpc_y, mpc_yaw, mpc_v, path_predict
-    
-    def theta_xy(self, theta):
-        cum_sum = self.cum_dists
     
     def print_info(self):
         print(f'mpc solve time          {self.mpc_solve_time}')
