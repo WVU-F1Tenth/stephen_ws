@@ -17,6 +17,10 @@ from .utils import quat_to_heading, RacelineSpline, Raceline
 from scipy.interpolate import splprep, splev
 from time import perf_counter
 
+# Notes:
+#   spline cw doesn't work
+#   Angles are off, check car axes
+
 map_path = os.environ.get('MAP_PATH')
 if map_path is None:
         raise RuntimeError('MAP_PATH not set')
@@ -31,7 +35,7 @@ class Config:
     wheelbase: float = 0.33
     max_steer: float = 0.33
     viz_rate: float = 5.0
-    use_spline: bool = False
+    use_spline: bool = True
 config = Config()
 
 # Numeric parameters adjustable by keyboard
@@ -67,14 +71,14 @@ class Stanley(Node):
         self.speed = 0.0
         
         df = pd.read_csv(CSV_PATH, header=0, comment='#', sep=';')
-        track = Raceline(df)
+        raceline = Raceline(df)
         if not config.ccw:
-            track.reverse()
+            raceline.reverse()
             
-        self.x_ref = track.x_ref
-        self.y_ref = track.y_ref
-        self.yaw_ref = track.yaw_ref
-        self.velocities = track.v_ref
+        self.x_ref = raceline.x_ref
+        self.y_ref = raceline.y_ref
+        self.yaw_ref = raceline.yaw_ref
+        self.velocities = raceline.v_ref
         # dists[0] = distance from point 0 to point 1
         self.dists = np.hypot(np.diff(self.x_ref), np.diff(self.y_ref))
         self.dist_sums = np.cumsum(np.append(self.dists, self.dists))
@@ -82,12 +86,12 @@ class Stanley(Node):
         self.u_max = u[-1]
 
         if config.use_spline:
-            self.raceline_spline = RacelineSpline(self.x_ref, self.y_ref)
+            self.raceline_spline = RacelineSpline(self.x_ref, self.y_ref, np.float32)
         
         self.publish_raceline(self.x_ref, self.y_ref)
 
     def print_info(self):
-        print(f'raceline conversion time = {self.race_conv_time}')
+        print(f'raceline conversion time = {self.race_conv_time*1000:.2f}ms')
 
     def odom_callback(self, odometry_info: Odometry):
         self.pose_callback(odometry_info.pose)
@@ -97,6 +101,7 @@ class Stanley(Node):
         x_car_map = pose.position.x
         y_car_map = pose.position.y
         heading_car_map = quat_to_heading(pose.orientation)
+
         lookahead = (params.lookahead.v * self.speed
                      if params.proportional_lookahead.v
                      else params.lookahead.v)
@@ -138,8 +143,16 @@ class Stanley(Node):
 
         # yaw_damping = 
 
-        angle_diff = (heading_car_map - heading_goal_map)
-        heading_error = math.atan2(math.cos(angle_diff), math.sin(angle_diff))
+        if config.ccw:
+            heading_error = math.atan2(
+                math.cos(-(heading_goal_map - heading_car_map)),
+                math.sin(-(heading_goal_map - heading_car_map))
+            )
+        else:
+            heading_error = math.atan2(
+                -math.cos(-(heading_goal_map - heading_car_map)),
+                -math.sin(-(heading_goal_map - heading_car_map))
+            )
         heading_term = params.k_heading.v * heading_error
 
         crosstrack_error = ((x_car_map - x_goal_map) * math.sin(heading_car_map) - 
@@ -204,7 +217,7 @@ class Stanley(Node):
         goal_marker.color.a = 1.0
         goal_marker.color.r = 1.0
         self.goal_viz.publish(goal_marker)
-    
+
 def main(args=None):
     rclpy.init(args=args)
     print("Stanley Initialized")

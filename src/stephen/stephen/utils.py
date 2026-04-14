@@ -129,7 +129,7 @@ class RacelineSpline:
         return self.s_to_xy(self.xy_to_s(point))
     
 class Raceline:
-    def __init__(self, df, dtype=np.float64):
+    def __init__(self, df, dtype=np.float32):
         self.x_ref_closed = df.iloc[:, 1].to_numpy(dtype=dtype)
         self.x_ref = self.x_ref_closed[:-1]
         self.y_ref_closed = df.iloc[:, 2].to_numpy(dtype=dtype)
@@ -147,5 +147,11 @@ class Raceline:
         self.yaw_ref = (self.yaw_ref[::-1] + math.pi) % (2 * math.pi) - math.pi
         self.k_ref = -self.k_ref[::-1]
         self.v_ref = self.v_ref[::-1]
+
+    def nearest(self, point):
+        dx = self.x_ref - point
+        dy = self.y_ref - point
+        d = np.hypot(dx, dy)
+        return np.argmin(d)
 
         

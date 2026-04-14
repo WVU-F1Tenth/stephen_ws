@@ -13,7 +13,7 @@ from geometry_msgs.msg import Point
 from std_msgs.msg import ColorRGBA
 from dataclasses import dataclass
 from .io_utils import Binding, DualBinding, KeyBindings
-from .disparity_utils import Scan, get_virtual, get_virtual2
+from .disp_utils import Scan, get_virtual, get_virtual2
 
 # Criteria: use steering angle
 # maximize distance seen when stable
@@ -141,8 +141,8 @@ class DisparityFollow(Node):
 
     def print_info(self):
         pass
-        # print(f'{self.pipeline_time = :.2f} ms')
-        # print(f'{self.get_virtual_time = :.2f} ms\n')
+        print(f'{self.pipeline_time/.025 = :.2f} %')
+        print(f'{self.get_virtual_time/.025 = :.2f} %\n')
 
     def publish_drive(self, velocity, acceleration, steering_angle, steering_velocity):
         drive_msg = AckermannDriveStamped()

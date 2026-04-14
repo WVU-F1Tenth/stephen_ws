@@ -21,7 +21,8 @@ class Scan:
         self.increment = self.angle_increment
         self.index_to_angle_array = np.arange(self.size)*self.increment + self.angle_min
         self.fov = self.angle_max - self.angle_min
-        
+        self.angles = scan.angle_min + np.arange(self.size) * scan.angle_increment
+
     def angle_to_index(self, angle):
         abs_angle = angle + self.angle_min
         total_angle = self.angle_max - self.angle_min
@@ -74,4 +75,25 @@ def get_virtual(ranges: np.ndarray, angle_increment: np.float32, extension: np.f
         j = index_extensions[i]
         new_ranges[max(0, i-j): min(n, i+j+1)] = np.minimum(new_ranges[max(0, i-j): min(n, i+j+1)], ranges[i])
     return new_ranges
+
+@njit
+def polar_intersects(theta1, r1, theta2, r2, threshold=0.5):
+    theta1 = np.mod(theta1, 2*np.pi)
+    theta1 = np.mod(theta1, 2*np.pi)
+    order2 = np.argsort(theta2)
+    theta2s = theta2[order2]
+    r2s = r2[order2]
+    theta2_ext = np.r_[theta2s, theta2s[0] + 2*np.pi]
+    r2_ext = np.r_[r2s, r2s[0]]
+    r2_at_theta1 = np.interp(theta1, theta2_ext, r2_ext)
+    diff = r2_at_theta1 - r1
+    significant = diff > threshold
+    return np.flatnonzero(significant)
+
+@njit
+def nearest_object_intersect(scan_angles, scan_ranges, path, car_pos):
+    """
+    Returns scan index of nearest forward object intersect from car.
+    """
+    pass
 
