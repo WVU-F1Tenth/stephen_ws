@@ -13,7 +13,7 @@ from geometry_msgs.msg import Point, PoseStamped
 from std_msgs.msg import ColorRGBA
 from dataclasses import dataclass
 from .io_utils import Binding, DualBinding, KeyBindings
-from .disp_utils import Scan, get_virtual, get_virtual2, nearest_object_intersect, polar_intersects
+from .disp_utils import Scan, get_virtual, nearest_object_intersect
 from pathlib import Path as FilePath
 import os
 from .utils import Raceline
@@ -47,7 +47,7 @@ class Config:
     a_tip: float = 10000.0
     # Vehicle parameters
     wheelbase: float = 0.33
-    max_steer: float = 0.33
+    max_steer: float = 0.38
     # Output parameters
     viz_rate: float = 0.2
     file_output: bool = True
@@ -89,6 +89,7 @@ class DisparityFollow(Node):
             self.sub_pose = self.create_subscription(PoseStamped, '/pf/viz/inferred_pose', self.pose_callback, 1)
         # Accessory sub/pub
         self.viz_timer = self.create_timer(config.viz_rate, self.publish_markers)
+        self.raceline_viz = self.create_publisher(Marker, '/viz/raceline', 10)
         self.keyboard_timer = self.create_timer(.2, params.check_input)
         self.print_timer = self.create_timer(1.0, self.print_info)
         self.line_marker_pub = self.create_publisher(Marker, '/viz/goal', 10)
@@ -115,6 +116,9 @@ class DisparityFollow(Node):
         self.v2: np.ndarray
         self.start_time = 0.0
         self.scan_flag = False
+        self.ready_flag = False
+
+        self.publish_raceline(self.raceline.x_ref, self.raceline.y_ref)
         
     def adjust(self, scan: LaserScan):
         if not self.scan_flag:
@@ -141,7 +145,7 @@ class DisparityFollow(Node):
             self.paths = self.get_paths(pos_disps, neg_disps)
 
             self.path = self.choose(self.paths)
-            
+
             steering_angle = self.get_steering(self.path)
 
             self.steering_angle, self.steering_velocity = self.get_smooth(steering_angle, self.speed)
@@ -152,7 +156,7 @@ class DisparityFollow(Node):
 
         # =====================================================
         except Exception as e:
-            print(f'Error in pipeline: {e}')
+            print(f'{e}')
             self.publish_drive(self.speed, 1.0, self.steering_angle, 1.0)
             return
 
@@ -162,14 +166,13 @@ class DisparityFollow(Node):
         self.publish_markers()
 
     def print_info(self):
-        pass
-        # print(f'{self.pipeline_time = :.2f} ms')
-        # print(f'{self.get_virtual_time = :.2f} ms\n')
+        print(f'pipeline load {self.pipeline_time/0.025:.2f}%')
+        print(f'virtual time load {self.get_virtual_time/0.025:.2f}%\n')
 
     def publish_drive(self, velocity, acceleration, steering_angle, steering_velocity):
         drive_msg = AckermannDriveStamped()
         drive_msg.header.stamp = self.get_clock().now().to_msg()
-        drive_msg.drive.steering_angle = steering_angle
+        drive_msg.drive.steering_angle = float(steering_angle)
         drive_msg.drive.steering_angle_velocity = steering_velocity
         drive_msg.drive.speed = velocity
         drive_msg.drive.acceleration = acceleration
@@ -204,6 +207,10 @@ class DisparityFollow(Node):
         if not valid_paths:
             raise RuntimeError('No valid paths found.')
 
+        for path in valid_paths:
+            path.angle = np.float32(self.scan.index_to_angle(path.index))
+            path.vangle = np.float32(self.scan.index_to_angle(path.vindex))
+
         return valid_paths
     
     def resolve_virtual(self, virtual, paths):
@@ -222,17 +229,21 @@ class DisparityFollow(Node):
             self.vdisps = vdisps
     
     def choose(self, paths):
+        if not hasattr(self, 'pose'):
+            raise RuntimeError('Pose not set yet')
         # Pick disp closest to raceline
         x_car = self.pose.position.x
         y_car = self.pose.position.y
         idx = nearest_object_intersect(
             self.scan.angles,
             self.ranges,
-            np.vstack(self.raceline.x_ref, self.raceline.y_ref), # type: ignore
+            np.vstack((self.raceline.x_ref, self.raceline.y_ref)),
             (x_car, y_car)
         )
         path_idxs = np.asarray([path.index for path in paths])
-        nearest_path = paths[np.argmin(path_idxs - idx)]
+        nearest_path = paths[np.argmin(np.abs(path_idxs - idx))]
+        if nearest_path == -1:
+            raise RuntimeError('Nearest path failure')
         return nearest_path
 
     def get_steering(self, path):
@@ -293,6 +304,22 @@ class DisparityFollow(Node):
         speed = min(v_tot, v_lat, config.max_speed)
         self.last_speed = speed
         return speed
+    
+    def publish_raceline(self, x, y):
+        raceline = Marker()
+        raceline.header.frame_id = "map"
+        raceline.id = 0
+        raceline.type = Marker.POINTS
+        raceline.action = Marker.ADD
+        raceline.pose.orientation.w = 1.0
+        raceline.scale.x = 0.1
+        raceline.scale.y = 0.1
+        raceline.color.a = 1.0
+        raceline.color.r = 0.0
+        raceline.color.g = 0.0
+        raceline.color.b = 1.0
+        raceline.points = [Point(x=float(x), y=float(y), z=0.0) for x, y in zip(x, y)]
+        self.raceline_viz.publish(raceline)
     
     def publish_markers(self):
         if self.path:

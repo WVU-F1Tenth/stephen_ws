@@ -76,24 +76,35 @@ def get_virtual(ranges: np.ndarray, angle_increment: np.float32, extension: np.f
         new_ranges[max(0, i-j): min(n, i+j+1)] = np.minimum(new_ranges[max(0, i-j): min(n, i+j+1)], ranges[i])
     return new_ranges
 
-@njit
-def polar_intersects(theta1, r1, theta2, r2, threshold=0.5):
-    theta1 = np.mod(theta1, 2*np.pi)
-    theta1 = np.mod(theta1, 2*np.pi)
-    order2 = np.argsort(theta2)
-    theta2s = theta2[order2]
-    r2s = r2[order2]
-    theta2_ext = np.r_[theta2s, theta2s[0] + 2*np.pi]
-    r2_ext = np.r_[r2s, r2s[0]]
-    r2_at_theta1 = np.interp(theta1, theta2_ext, r2_ext)
-    diff = r2_at_theta1 - r1
-    significant = diff > threshold
-    return np.flatnonzero(significant)
-
-@njit
-def nearest_object_intersect(scan_angles, scan_ranges, path, car_pos):
+@njit(cache=True)
+def nearest_object_intersect(scan_theta, scan_ranges, path, car_pos):
     """
     Returns scan index of nearest forward object intersect from car.
     """
-    pass
+    N = scan_ranges.size
+    dx = path[0] - car_pos[0]
+    dy = path[1] - car_pos[1]
+    ref_r = np.hypot(dx, dy)
+    ref_theta = (np.arctan2(dy, dx) + 2*np.pi) % (2*np.pi)
+    scan_theta = (scan_theta + 2*np.pi) % (2*np.pi)
+    order = np.argsort(ref_theta)
+    ref_theta_s = ref_theta[order]
+    ref_r_s = ref_r[order]
+    ref_theta_p = np.empty((ref_theta.size + 1))
+    ref_r_p = np.empty((ref_r.size + 1))
+    ref_theta_p[:-1] = ref_theta_s
+    ref_theta_p[-1] = ref_theta_s[0]+2*np.pi
+    ref_r_p[:-1] = ref_r_s
+    ref_r_p[-1] = ref_r_s[0]
+    ref_r_adjusted = np.interp(scan_theta, ref_theta_p, ref_r_p)
+    nearest_theta = ref_theta[np.argmin(ref_r)]
+    idx = np.argmin(np.abs(scan_theta - nearest_theta))
+    for _ in range(N):
+        if scan_ranges[idx] < ref_r_adjusted[idx]:
+            return idx
+        idx = (idx + 1) % N
+    return -1
+    
+
+
 
