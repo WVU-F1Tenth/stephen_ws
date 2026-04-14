@@ -163,9 +163,12 @@ class DisparityFollow(Node):
         self.publish_drive(self.speed, 1.0, self.steering_angle, self.steering_velocity)
         self.v1 = self.ranges
         self.v2 = self.virtual
-        self.publish_markers()
+
+        self.ready_flag = True
 
     def print_info(self):
+        if not self.ready_flag:
+            return
         print(f'pipeline load {self.pipeline_time/0.025:.2f}%')
         print(f'virtual time load {self.get_virtual_time/0.025:.2f}%\n')
 
@@ -240,6 +243,8 @@ class DisparityFollow(Node):
             np.vstack((self.raceline.x_ref, self.raceline.y_ref)),
             (x_car, y_car)
         )
+        self.intersect_idx = idx
+        self.intersect_range = self.ranges[idx]
         path_idxs = np.asarray([path.index for path in paths])
         nearest_path = paths[np.argmin(np.abs(path_idxs - idx))]
         if nearest_path == -1:
@@ -322,7 +327,9 @@ class DisparityFollow(Node):
         self.raceline_viz.publish(raceline)
     
     def publish_markers(self):
-        if self.path:
+        if not self.ready_flag:
+            return
+        if hasattr(self, 'path') and hasattr(self.path, 'vdepth'):
             L = self.path.vdepth
             theta = self.steering_angle
             p0 = Point(x=0.0, y=0.0, z=0.0)
@@ -339,15 +346,15 @@ class DisparityFollow(Node):
             m.color = ColorRGBA(r=0.0, g=1.0, b=1.0, a=1.0)
             m.points = [p0, p1]
             self.line_marker_pub.publish(m)
-        if config.publish_v1:
+        if config.publish_v1 and hasattr(self, 'v1'):
             msg = Float32MultiArray()
             msg.data = self.v1.tolist()
             self.v1_pub.publish(msg)
-        if config.publish_v2:
+        if config.publish_v2 and hasattr(self, 'v2'):
             msg = Float32MultiArray()
             msg.data = self.v2.tolist()
             self.v2_pub.publish(msg)
-        if config.publish_points1:
+        if config.publish_points1 and hasattr(self, 'paths'):
             points1 = [Point(x=path.depth*math.cos(path.angle),
                             y=path.depth*math.sin(path.angle),
                             z=0.0) for path in self.paths]
@@ -363,7 +370,7 @@ class DisparityFollow(Node):
             m.color = ColorRGBA(r=1.0, g=0.0, b=0.0, a=1.0)
             m.points = points1
             self.points1_pub.publish(m)
-        if config.publish_points2:
+        if config.publish_points2 and hasattr(self, 'paths'):
             points2 = [Point(x=path.vdepth*math.cos(path.vangle),
                             y=path.vdepth*math.sin(path.vangle),
                             z=0.0) for path in self.paths]
@@ -379,10 +386,10 @@ class DisparityFollow(Node):
             m.color = ColorRGBA(r=0.0, g=1.0, b=0.0, a=1.0)
             m.points = points2
             self.points2_pub.publish(m)
-        if config.publish_points3 and hasattr(self, 'vdisps'):
-            points3 = [Point(x=self.virtual[disp]*math.cos(self.scan.index_to_angle(disp)),
-                            y=self.virtual[disp]*math.sin(self.scan.index_to_angle(disp)),
-                            z=0.0) for disp in self.vdisps]
+        if config.publish_points3 and hasattr(self, 'intersect_idx'):
+            points3 = [Point(x=self.intersect_range*math.cos(self.scan.index_to_angle(idx)),
+                            y=self.intersect_range*math.sin(self.scan.index_to_angle(idx)),
+                            z=0.0) for idx in [self.intersect_idx]]
             m = Marker()
             m.header.frame_id = '/ego_racecar/laser'
             m.header.stamp = self.get_clock().now().to_msg()

@@ -24,7 +24,7 @@ setup(
             'wall_follow=stephen.wall_follow:main',
             'scan_visual=stephen.scan_visual:main',
             'disparity_follow=stephen.disp_follow:main',
-            'disp_mapped=stephen.disp_follow_mapped:main',
+            'mapped_disp_follow=stephen.mapped_disp_follow:main',
             'test=stephen.testing:main',
             'pure_pursuit=stephen.pure_pursuit:main',
             'stanley=stephen.stanley:main',

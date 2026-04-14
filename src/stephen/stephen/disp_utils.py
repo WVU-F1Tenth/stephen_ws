@@ -76,7 +76,7 @@ def get_virtual(ranges: np.ndarray, angle_increment: np.float32, extension: np.f
         new_ranges[max(0, i-j): min(n, i+j+1)] = np.minimum(new_ranges[max(0, i-j): min(n, i+j+1)], ranges[i])
     return new_ranges
 
-@njit(cache=True)
+#@njit(cache=True)
 def nearest_object_intersect(scan_theta, scan_ranges, path, car_pos):
     """
     Returns scan index of nearest forward object intersect from car.
