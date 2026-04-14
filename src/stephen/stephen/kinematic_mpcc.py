@@ -18,7 +18,7 @@ from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Point
 import pandas as pd
 from time import perf_counter
-from .utils import quat_to_heading
+from .utils import RacelineSpline, quat_to_heading
 from .io_utils import Binding, DualBinding, KeyBindings
 from .utils import threshold_index_cumulative
 
@@ -69,9 +69,10 @@ class mpc_config:
 class State:
     x: float = 0.0
     y: float = 0.0
-    delta: float = 0.0
     v: float = 0.0
     yaw: float = 0.0
+    theta: float = 0.0
+    delta: float = 0.0
     yawrate: float = 0.0
     beta: float = 0.0
 
@@ -93,21 +94,19 @@ class MPC(Node):
         
         # Reading CSV data
         df = pd.read_csv(CSV_PATH, header=0, comment='#', sep=';')
-        waypoints_x_closed = df.iloc[:, 1].to_numpy(dtype=float)
-        self.ref_x = waypoints_x_closed[:-1]
-        waypoints_y_closed = df.iloc[:, 2].to_numpy(dtype=float)
-        self.ref_y = waypoints_y_closed[:-1]
+        x_ref_closed = df.iloc[:, 1].to_numpy(dtype=float)
+        self.ref_x = x_ref_closed[:-1]
+        y_ref_closed = df.iloc[:, 2].to_numpy(dtype=float)
+        self.ref_y = y_ref_closed[:-1]
         self.ref_yaw = df.iloc[:-1, 3].to_numpy(dtype=float)
         self.curvatures = df.iloc[:-1, 4].to_numpy(dtype=float)
         self.ref_v = df.iloc[:-1, 5].to_numpy(dtype=float)
         self.point_count = self.ref_x.size
-        # dists[0] = distance from point 0 to point 1
-        self.dists = np.hypot(np.diff(waypoints_x_closed), np.diff(waypoints_y_closed))
-        self.max_theta = np.sum(self.dists)
-        self.start_index = None
+
+        # Spline
+        self.raceline = RacelineSpline(x_ref_closed, y_ref_closed, dtype=float)
 
         self.config = mpc_config()
-        self.config.dlk = float(np.mean(self.dists))
         self.odelta = [0.0] * self.config.TK
         self.oa = [0.0] * self.config.TK
         self.otheta = [0.0] * self.config.TK
@@ -130,17 +129,15 @@ class MPC(Node):
         vehicle_state = State(
             x = pose.position.x,
             y = pose.position.y,
-            delta = self.odelta_input,
             v = twist.linear.x,
             yaw = quat_to_heading(pose.orientation),
+            theta = float(self.raceline.xy_to_s((pose.position.x, pose.position.y))),
+            delta = self.odelta_input,
             yawrate = twist.angular.z,
             beta = 0.0,
         )
 
-        # ref_path = self.calc_ref_trajectory(vehicle_state, self.ref_x, self.ref_y, self.ref_yaw, self.ref_v)
-        x0 = [vehicle_state.x, vehicle_state.y, vehicle_state.v, vehicle_state.yaw]
-
-        self.start_index = self.nearest_point(self.ref_x, self.ref_y, vehicle_state.x, vehicle_state.y)
+        x0 = [vehicle_state.x, vehicle_state.y, vehicle_state.v, vehicle_state.yaw, vehicle_state.theta]
 
         (
             self.oa,
@@ -151,7 +148,7 @@ class MPC(Node):
             ov,
             otheta,
             state_predict,
-        ) = self.linear_mpc_control(x0, self.oa, self.odelta, self.otheta)
+        ) = self.linear_mpc_control(x0, self.oa, self.odelta)
         
         self.ovel_input = np.clip(vehicle_state.v + self.oa[0] * self.config.DTK, # type: ignore
                             self.config.MIN_SPEED,
@@ -481,7 +478,7 @@ class MPC(Node):
 
         return oa, odelta, ox, oy, oyaw, ov
 
-    def linear_mpc_control(self, ref_path, x0, oa, od, otheta):
+    def linear_mpc_control(self, ref_path, x0, oa, od):
         """
         MPC contorl with updating operational point iteraitvely
         :param ref_path: reference trajectory in T steps
@@ -491,7 +488,7 @@ class MPC(Node):
         """
 
         # Call the Motion Prediction function: Predict the vehicle motion for x-steps
-        # path_predict = self.predict_motion(x0, oa, od, otheta, ref_path)
+        # path_predict = self.predict_motion(x0, oa, od, ref_spline)
 
         # Run the MPC optimization: Create and solve the optimization problem
         mpc_a, mpc_delta, mpc_x, mpc_y, mpc_yaw, mpc_v = self.mpc_prob_solve(

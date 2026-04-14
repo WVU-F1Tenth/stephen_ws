@@ -68,7 +68,7 @@ def map_to_car_point(car_pose: Pose, map_point: Tuple[float, float]):
     return x_car, y_car
 
 class RacelineSpline:
-    def __init__(self, xref, yref, smooth=0.0, n_dense=5000, dtype=np.float64):
+    def __init__(self, xref, yref, dtype, smooth=0.0, n_dense=5000):
         self.dtype = dtype
         self.tck, self.u = splprep([xref, yref], per=1, s=smooth)
         self.u0, self.u1 = self.u[0], self.u[-1]

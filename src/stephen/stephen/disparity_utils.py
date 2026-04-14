@@ -7,7 +7,6 @@ import numpy as np
 from sensor_msgs.msg import LaserScan
 from dataclasses import dataclass
 
-@dataclass
 class Scan:
     def __init__(self, scan: LaserScan):
         self.size = len(scan.ranges)
@@ -51,7 +50,7 @@ class Scan:
             return 0.0
         return 2 * math.asin(span / (2 * depth))
     
-def get_virtual(ranges, angle_increment, extension):
+def get_virtual2(ranges, angle_increment, extension):
         n = len(ranges)
         range_matrix = np.full((n, n), np.inf, dtype=np.float32)
         ratio = extension / (2 * ranges)
@@ -63,3 +62,16 @@ def get_virtual(ranges, angle_increment, extension):
         range_matrix = np.where(mask, ranges[:, None], np.inf).astype(np.float32)
         col_mins = range_matrix.min(axis=0)
         return col_mins
+
+@njit
+def get_virtual(ranges: np.ndarray, angle_increment: np.float32, extension: np.float32) -> np.ndarray:
+    n = len(ranges)
+    ratio = extension / (2 * ranges)
+    ratio = np.clip(ratio, -1.0, 1.0)
+    index_extensions = np.abs(2*np.arcsin(ratio)/angle_increment).astype(np.int32)
+    new_ranges = ranges.copy()
+    for i in range(n):
+        j = index_extensions[i]
+        new_ranges[max(0, i-j): min(n, i+j+1)] = np.minimum(new_ranges[max(0, i-j): min(n, i+j+1)], ranges[i])
+    return new_ranges
+

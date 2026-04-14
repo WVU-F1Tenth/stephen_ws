@@ -13,8 +13,11 @@ from geometry_msgs.msg import Point
 from std_msgs.msg import ColorRGBA
 from dataclasses import dataclass
 from .io_utils import Binding, DualBinding, KeyBindings
-from .disparity_utils import Scan, get_virtual
+from .disparity_utils import Scan, get_virtual, get_virtual2
 
+# Criteria: use steering angle
+# maximize distance seen when stable
+# steer to center of space
 
 @dataclass
 class Config:
@@ -49,7 +52,7 @@ params = KeyBindings(
     velocities_mode=DualBinding('Velocities Mode', 'v', 's', False),
     disparity_threshold=Binding('disparity threshold', 't', 0.5),
     steering_velocity=Binding('steering velocity', 'w', 0.0),
-    map_extension=Binding('map extension', 'e', 0.25),
+    map_extension=Binding('map extension', 'e', 0.45),
 )
 
 @dataclass
@@ -83,15 +86,17 @@ class DisparityFollow(Node):
         if config.publish_points3:
             self.points3_pub = self.create_publisher(Marker, '/viz/points3', 10)
         
+        self.path = None
         self.steering_angle: np.float32 = np.float32(0.0)
         self.speed: float = 0.0
         self.v1: np.ndarray
         self.v2: np.ndarray
-        self.scan = None
         self.start_time = 0.0
+        self.scan_flag = False
         
     def adjust(self, scan: LaserScan):
-        if self.scan is None:
+        if not self.scan_flag:
+            self.scan_flag = True
             self.scan = Scan(scan)
             self.v1 = np.zeros(self.scan.size)
             self.v2 = np.zeros(self.scan.size)
@@ -106,7 +111,7 @@ class DisparityFollow(Node):
             # self.apply_range_limit(ranges, 10.0)
 
             get_virtual_start = perf_counter()
-            self.virtual = get_virtual(self.ranges, self.scan.increment, params.map_extension.v)
+            self.virtual = get_virtual(self.ranges, np.float32(self.scan.increment), np.float32(params.map_extension.v))
             self.get_virtual_time = (perf_counter() - get_virtual_start) * 1_000
 
             pos_disps, neg_disps = self.disparities(self.ranges)
@@ -135,8 +140,9 @@ class DisparityFollow(Node):
         self.publish_markers()
 
     def print_info(self):
-        print(f'{self.pipeline_time = :.2f} ms')
-        print(f'{self.get_virtual_time = :.2f} ms\n')
+        pass
+        # print(f'{self.pipeline_time = :.2f} ms')
+        # print(f'{self.get_virtual_time = :.2f} ms\n')
 
     def publish_drive(self, velocity, acceleration, steering_angle, steering_velocity):
         drive_msg = AckermannDriveStamped()
@@ -165,8 +171,6 @@ class DisparityFollow(Node):
         
         self.resolve_virtual(self.virtual, paths)
         
-        self.resolve_radii(self.ranges, paths, params.map_extension.v)
-
         valid_paths = [path for path in paths if path.valid]
 
         if not valid_paths:
@@ -188,30 +192,7 @@ class DisparityFollow(Node):
             path.vdepth = virtual[goal]
             path.vangle = self.scan.index_to_angle(goal)
             self.vdisps = vdisps
-
-    def resolve_radii(self, ranges, paths, min_radius):
-        pass
-        # disp = self.index
-        # depth = self.depth
-        # if self.sign > 0:
-        #     start = disp + 1
-        #     end = int(disp + 2 * self.scan.span_to_angle(max_radius, depth) / self.scan.angle_increment)
-        #     if start >= end or start < 0 or end >= len(ranges) or end < 0:
-        #         self.radius = 0.0
-        #         return False
-        # if self.sign < 0:
-        #     end = disp - 1
-        #     start = int(disp - 2 * self.scan.span_to_angle(max_radius, depth) / self.scan.angle_increment)
-        #     if start >= end or start < 0 or end >= len(ranges) or end < 0:
-        #         self.radius = 0.0
-        #         return False
-        # section = slice(start, end + 1)
-        # section_ranges = ranges[section]
-        # radii = np.sqrt(ranges[disp]**2 + section_ranges**2 - 2 * ranges[disp] * section_ranges)
-        # min_radius = np.min(radii)
-        # self.radius = min_radius
-        # return True
-
+    
     def choose(self, paths):
         # HARDCODED
         steps = (0, 90, 180, 360, 539)
@@ -250,20 +231,6 @@ class DisparityFollow(Node):
     def get_steering(self, path):
         if path is None:
             return self.steering_angle
-        if path.vdepth > 0:
-            return self.get_arc_angle(path)
-        else:
-            return self.get_line_angle(path)
-
-    def get_arc_angle(self, path):
-        theta = self.scan.index_to_angle(path.vindex)
-        y = math.sin(theta)
-        gamma = 2 * y / path.vdepth**2
-        delta = np.arctan(config.wheelbase * gamma)
-        angle = np.clip(delta, -config.max_steer, config.max_steer)
-        return angle
-
-    def get_line_angle(self, path):
         theta = self.scan.index_to_angle(path.vindex)
         angle = np.clip(theta, -config.max_steer, config.max_steer)
         return angle
@@ -275,22 +242,9 @@ class DisparityFollow(Node):
             dt = 0.025
         self.start_time = perf_counter()
 
-        # Low pass filter
-        if False:
-            alpha = self.tau/(self.tau + dt)
-            theta = (alpha * self.prev_filtered) + ((1 - alpha) * theta)
-            self.prev_filtered = theta
-
         # Velocity calulation
-        theta_velocity = params.steering_velocity.v * theta
+        theta_velocity = params.steering_velocity.v * theta**2
             
-        # Slew rate (limit on rate of change)
-        if False:
-            delta = theta - self.theta
-            max_step = self.slew_rate * dt
-            if abs(delta) > max_step:
-                theta = self.theta + (max_step if delta > 0 else -max_step)
-
         theta = np.clip(theta, -config.max_steer, config.max_steer)
         self.theta = theta
         return theta, theta_velocity
