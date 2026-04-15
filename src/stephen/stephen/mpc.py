@@ -18,7 +18,7 @@ from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Point
 import pandas as pd
 from time import perf_counter
-from .utils import quat_to_heading
+from .utils import quat_to_yaw
 from .io_utils import Binding, DualBinding, KeyBindings
 
 SIMULATOR = True
@@ -131,7 +131,7 @@ class MPC(Node):
             y = pose.position.y,
             delta = self.odelta_input,
             v = twist.linear.x,
-            yaw = quat_to_heading(pose.orientation),
+            yaw = quat_to_yaw(pose.orientation),
             yawrate = twist.angular.z,
             beta = 0.0,
         )

@@ -13,7 +13,7 @@ from .utils import threshold_index_cumulative
 from time import perf_counter
 from dataclasses import dataclass
 from .io_utils import Binding, DualBinding, KeyBindings
-from .utils import quat_to_heading, map_to_car_point, Raceline
+from .utils import quat_to_yaw, map_to_car_point, Raceline
 
 map_path = os.environ.get('MAP_PATH')
 if map_path is None:
@@ -83,7 +83,7 @@ class PurePursuit(Node):
         pose = pose_stamped.pose
         x_car_map = pose.position.x
         y_car_map = pose.position.y
-        heading_car_map = quat_to_heading(pose.orientation)
+        heading_car_map = quat_to_yaw(pose.orientation)
 
         # ===================================================================================
 

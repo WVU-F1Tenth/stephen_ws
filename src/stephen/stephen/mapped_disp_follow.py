@@ -13,10 +13,10 @@ from geometry_msgs.msg import Point, PoseStamped
 from std_msgs.msg import ColorRGBA
 from dataclasses import dataclass
 from .io_utils import Binding, DualBinding, KeyBindings
-from .disp_utils import Scan, get_virtual, nearest_object_intersect
+from .disp_utils import Scan, get_virtual, nearest_object_intersect, nearest_object_intersect2
 from pathlib import Path as FilePath
 import os
-from .utils import Raceline
+from .utils import Raceline, quat_to_yaw
 import pandas as pd
 from numba import njit
 
@@ -57,6 +57,9 @@ class Config:
     publish_v1: bool = True
     publish_v2: bool = True
 config = Config()
+
+if config.simulation:
+    config.wheelbase = 0.28
 
 params = KeyBindings(
     acceleration=Binding('acceleration', 'a', 0.0),
@@ -237,16 +240,17 @@ class DisparityFollow(Node):
         # Pick disp closest to raceline
         x_car = self.pose.position.x
         y_car = self.pose.position.y
-        idx = nearest_object_intersect(
+        yaw_car = quat_to_yaw(self.pose.orientation)
+        r, theta = nearest_object_intersect(
             self.scan.angles,
             self.ranges,
             np.vstack((self.raceline.x_ref, self.raceline.y_ref)),
-            (x_car, y_car)
+            (x_car, y_car, yaw_car),
+            config.wheelbase
         )
-        self.intersect_idx = idx
-        self.intersect_range = self.ranges[idx]
-        path_idxs = np.asarray([path.index for path in paths])
-        nearest_path = paths[np.argmin(np.abs(path_idxs - idx))]
+        self.intersect_r, self.intersect_theta = r, theta
+        path_idxs = np.asarray([path.angle for path in paths])
+        nearest_path = paths[np.argmin(np.abs(path_idxs - theta))]
         if nearest_path == -1:
             raise RuntimeError('Nearest path failure')
         return nearest_path
@@ -330,7 +334,7 @@ class DisparityFollow(Node):
         if not self.ready_flag:
             return
         if hasattr(self, 'path') and hasattr(self.path, 'vdepth'):
-            L = self.path.vdepth
+            L = self.path.vdepth # type: ignore
             theta = self.steering_angle
             p0 = Point(x=0.0, y=0.0, z=0.0)
             p1 = Point(x=L*math.cos(theta), y=L*math.sin(theta), z=0.0)
@@ -357,7 +361,7 @@ class DisparityFollow(Node):
         if config.publish_points1 and hasattr(self, 'paths'):
             points1 = [Point(x=path.depth*math.cos(path.angle),
                             y=path.depth*math.sin(path.angle),
-                            z=0.0) for path in self.paths]
+                            z=0.1) for path in self.paths]
             m = Marker()
             m.header.frame_id = '/ego_racecar/laser'
             m.header.stamp = self.get_clock().now().to_msg()
@@ -373,7 +377,7 @@ class DisparityFollow(Node):
         if config.publish_points2 and hasattr(self, 'paths'):
             points2 = [Point(x=path.vdepth*math.cos(path.vangle),
                             y=path.vdepth*math.sin(path.vangle),
-                            z=0.0) for path in self.paths]
+                            z=0.1) for path in self.paths]
             m = Marker()
             m.header.frame_id = '/ego_racecar/laser'
             m.header.stamp = self.get_clock().now().to_msg()
@@ -386,12 +390,16 @@ class DisparityFollow(Node):
             m.color = ColorRGBA(r=0.0, g=1.0, b=0.0, a=1.0)
             m.points = points2
             self.points2_pub.publish(m)
-        if config.publish_points3 and hasattr(self, 'intersect_idx'):
-            points3 = [Point(x=self.intersect_range*math.cos(self.scan.index_to_angle(idx)),
-                            y=self.intersect_range*math.sin(self.scan.index_to_angle(idx)),
-                            z=0.0) for idx in [self.intersect_idx]]
+        if config.publish_points3:
+            points3 = [Point(x=float(self.intersect_r*math.cos(self.intersect_theta)),
+                            y=float(self.intersect_r*math.sin(self.intersect_theta)),
+                            z=0.1)]
+            # points3 = [Point(x=float(self.intersect_r),
+            #                 y=float(self.intersect_theta),
+            #                 z=0.0)]
             m = Marker()
             m.header.frame_id = '/ego_racecar/laser'
+            # m.header.frame_id = '/ego_racecar/laser'
             m.header.stamp = self.get_clock().now().to_msg()
             m.ns = 'points3'
             m.id = 0
@@ -399,7 +407,7 @@ class DisparityFollow(Node):
             m.action = Marker.ADD
             m.scale.x = 0.2
             m.scale.y = 0.2
-            m.color = ColorRGBA(r=0.0, g=0.0, b=1.0, a=0.5)
+            m.color = ColorRGBA(r=0.0, g=0.0, b=1.0, a=1.0)
             m.points = points3
             self.points3_pub.publish(m)
 

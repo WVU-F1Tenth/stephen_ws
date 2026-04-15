@@ -43,11 +43,11 @@ def threshold_index(ar, start_index, threshold):
     else:
         return index, offset
     
-def quat_to_heading(orientation: Quaternion):
+def quat_to_yaw(orientation: Quaternion):
     quat = [orientation.x, orientation.y, orientation.z, orientation.w]
     return Rotation.from_quat(quat).as_euler('xyz')[2]
 
-def heading_to_quat(yaw):
+def yaw_to_quat(yaw):
     q = Quaternion()
     q.x = 0.0
     q.y = 0.0
@@ -62,7 +62,7 @@ def map_to_car_point(car_pose: Pose, map_point: Tuple[float, float]):
     map_x, map_y = map_point
     dx = map_x - car_pose.position.x
     dy = map_y - car_pose.position.y
-    theta = quat_to_heading(car_pose.orientation)
+    theta = quat_to_yaw(car_pose.orientation)
     x_car =  math.cos(theta) * dx + math.sin(theta) * dy
     y_car = -math.sin(theta) * dx + math.cos(theta) * dy
     return x_car, y_car

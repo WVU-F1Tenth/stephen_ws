@@ -76,8 +76,8 @@ def get_virtual(ranges: np.ndarray, angle_increment: np.float32, extension: np.f
         new_ranges[max(0, i-j): min(n, i+j+1)] = np.minimum(new_ranges[max(0, i-j): min(n, i+j+1)], ranges[i])
     return new_ranges
 
-#@njit(cache=True)
-def nearest_object_intersect(scan_theta, scan_ranges, path, car_pos):
+#TODO: FIX
+def nearest_object_intersect2(scan_theta, scan_ranges, path, car_pos):
     """
     Returns scan index of nearest forward object intersect from car.
     """
@@ -85,7 +85,7 @@ def nearest_object_intersect(scan_theta, scan_ranges, path, car_pos):
     dx = path[0] - car_pos[0]
     dy = path[1] - car_pos[1]
     ref_r = np.hypot(dx, dy)
-    ref_theta = (np.arctan2(dy, dx) + 2*np.pi) % (2*np.pi)
+    ref_theta = (-np.arctan2(dx, dy) + 2*np.pi) % (2*np.pi)
     scan_theta = (scan_theta + 2*np.pi) % (2*np.pi)
     order = np.argsort(ref_theta)
     ref_theta_s = ref_theta[order]
@@ -97,14 +97,34 @@ def nearest_object_intersect(scan_theta, scan_ranges, path, car_pos):
     ref_r_p[:-1] = ref_r_s
     ref_r_p[-1] = ref_r_s[0]
     ref_r_adjusted = np.interp(scan_theta, ref_theta_p, ref_r_p)
-    nearest_theta = ref_theta[np.argmin(ref_r)]
-    idx = np.argmin(np.abs(scan_theta - nearest_theta))
-    for _ in range(N):
-        if scan_ranges[idx] < ref_r_adjusted[idx]:
-            return idx
-        idx = (idx + 1) % N
-    return -1
-    
+    hits = scan_ranges < ref_r_adjusted
+    if not np.any(hits):
+        return -1
+    return np.argmin(np.where(hits, scan_ranges, np.inf))
 
 
-
+@njit
+def nearest_object_intersect(scan_angles, scan_ranges, path, car_pose, wheelbase):
+    """
+    Returns scan index of nearest forward object intersect from car.
+    """
+    yaw_map = car_pose[2]
+    # Project to laser placement
+    x_car_map = car_pose[0] + wheelbase * math.cos(yaw_map)
+    y_car_map = car_pose[1] + wheelbase * math.sin(yaw_map)
+    dx_map = (path[0] - x_car_map)
+    dy_map = (path[1] - y_car_map)
+    yaw_map = car_pose[2]
+    d = np.hypot(dx_map, dy_map)
+    dx = np.cos(yaw_map)*dx_map + np.sin(yaw_map)*dy_map
+    dy = -np.sin(yaw_map)*dx_map + np.cos(yaw_map)*dy_map
+    nearest = np.argmin(d)
+    idx = nearest
+    for _ in range(dx.size):
+        r = np.hypot(dx[idx], dy[idx])
+        theta = np.arctan2(dy[idx], dx[idx])
+        scan_r = np.interp(theta, scan_angles, scan_ranges)
+        if r > scan_r:
+            return r, theta
+        idx = (idx + 1) % dx.size
+    raise RuntimeError('No object intersection found')

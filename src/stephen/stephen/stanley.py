@@ -13,7 +13,7 @@ import math
 import os
 from .io_utils import Binding, DualBinding, KeyBindings
 from dataclasses import dataclass
-from .utils import quat_to_heading, RacelineSpline, Raceline
+from .utils import quat_to_yaw, RacelineSpline, Raceline
 from scipy.interpolate import splprep, splev
 from time import perf_counter
 
@@ -100,7 +100,7 @@ class Stanley(Node):
         pose = pose_stamped.pose
         x_car_map = pose.position.x
         y_car_map = pose.position.y
-        heading_car_map = quat_to_heading(pose.orientation)
+        heading_car_map = quat_to_yaw(pose.orientation)
 
         lookahead = (params.lookahead.v * self.speed
                      if params.proportional_lookahead.v

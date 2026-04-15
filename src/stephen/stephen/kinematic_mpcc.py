@@ -18,7 +18,7 @@ from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Point
 import pandas as pd
 from time import perf_counter
-from .utils import RacelineSpline, quat_to_heading
+from .utils import RacelineSpline, quat_to_yaw
 from .io_utils import Binding, DualBinding, KeyBindings
 from .utils import threshold_index_cumulative
 
@@ -130,7 +130,7 @@ class MPC(Node):
             x = pose.position.x,
             y = pose.position.y,
             v = twist.linear.x,
-            yaw = quat_to_heading(pose.orientation),
+            yaw = quat_to_yaw(pose.orientation),
             theta = float(self.raceline.xy_to_s((pose.position.x, pose.position.y))),
             delta = self.odelta_input,
             yawrate = twist.angular.z,
