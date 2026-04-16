@@ -104,17 +104,16 @@ def nearest_object_intersect2(scan_theta, scan_ranges, path, car_pos):
 
 
 @njit
-def nearest_object_intersect(scan_angles, scan_ranges, path, car_pose, wheelbase):
+def nearest_object_intersect(scan_angles, scan_ranges, ref, car_xyyaw):
     """
     Returns scan index of nearest forward object intersect from car.
     """
-    yaw_map = car_pose[2]
-    # Project to laser placement
-    x_car_map = car_pose[0] + wheelbase * math.cos(yaw_map)
-    y_car_map = car_pose[1] + wheelbase * math.sin(yaw_map)
-    dx_map = (path[0] - x_car_map)
-    dy_map = (path[1] - y_car_map)
-    yaw_map = car_pose[2]
+    x_car_map = car_xyyaw[0]
+    y_car_map = car_xyyaw[1]
+    yaw_map = car_xyyaw[2]
+    dx_map = (ref[0] - x_car_map)
+    dy_map = (ref[1] - y_car_map)
+    yaw_map = car_xyyaw[2]
     d = np.hypot(dx_map, dy_map)
     dx = np.cos(yaw_map)*dx_map + np.sin(yaw_map)*dy_map
     dy = -np.sin(yaw_map)*dx_map + np.cos(yaw_map)*dy_map

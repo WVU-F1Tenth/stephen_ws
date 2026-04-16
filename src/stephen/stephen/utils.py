@@ -154,4 +154,20 @@ class Raceline:
         d = np.hypot(dx, dy)
         return np.argmin(d)
 
-        
+def map_to_car(x, y, yaw, x_c, y_c, yaw_c):
+    dx = x - x_c
+    dy = y - y_c
+    c = np.cos(yaw_c)
+    s = np.sin(yaw_c)
+    x_car = c * dx + s * dy
+    y_car = -s * dx + c * dy
+    yaw_car = np.arctan2(np.sin(yaw - yaw_c), np.cos(yaw - yaw_c))
+    return x_car, y_car, yaw_car
+
+def car_to_map(x, y, yaw, x_c, y_c, yaw_c):
+    c = np.cos(yaw_c)
+    s = np.sin(yaw_c)
+    x_map = x_c + c * x - s * y
+    y_map = y_c + s * x + c * y
+    yaw_map = np.arctan2(np.sin(yaw + yaw_c), np.cos(yaw + yaw_c))
+    return x_map, y_map, yaw_map
