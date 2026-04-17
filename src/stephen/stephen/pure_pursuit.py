@@ -178,8 +178,8 @@ class PurePursuit(Node):
     def publish_markers(self):
         point = Point()
         goal_marker = Marker()
-        point.x = self.track.x_ref[self.goal_index]
-        point.y = self.track.y_ref[self.goal_index]
+        point.x = float(self.track.x_ref[self.goal_index])
+        point.y = float(self.track.y_ref[self.goal_index])
         goal_marker.points = []
         goal_marker.points.append(point)
         goal_marker.header.frame_id = "map"
