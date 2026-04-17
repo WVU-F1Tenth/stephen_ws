@@ -54,6 +54,7 @@ class PurePursuit(Node):
             self.sub_pose = self.create_subscription(PoseStamped, '/pf/viz/inferred_pose', self.pose_callback, 1)
         self.viz_timer = self.create_timer(1.0 / config.viz_rate, self.publish_markers)
         self.keyboard_timer = self.create_timer(.2, params.check_input)
+        self.ready_flag = False
 
         self.angle = 0.0
         self.speed = 0.0
@@ -143,6 +144,7 @@ class PurePursuit(Node):
         self.speed = self.get_speed()
 
         self.publish_drive()
+        self.ready_flag = True
         
     def get_speed(self):
         if params.velocities_mode.v:
@@ -176,6 +178,8 @@ class PurePursuit(Node):
         self.raceline_viz.publish(raceline)
 
     def publish_markers(self):
+        if not self.ready_flag:
+            return
         point = Point()
         goal_marker = Marker()
         point.x = float(self.track.x_ref[self.goal_index])

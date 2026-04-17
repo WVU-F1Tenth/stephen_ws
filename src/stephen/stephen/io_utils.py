@@ -58,9 +58,6 @@ class KeyBindings:
         self.terminal_settings = termios.tcgetattr(self.fd)
         tty.setcbreak(self.fd)
         
-    def add_state(self, name: str, v: bool):
-        self.__dict__[name] = v
-
     def check_input(self):
         key = self.get_key()
         if not key:

@@ -66,6 +66,7 @@ class Stanley(Node):
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
         self.keyboard_timer = self.create_timer(.2, params.check_input)
         self.print_timer = self.create_timer(1.0, self.print_info)
+        self.ready_flag = False
 
         self.angle = 0.0
         self.speed = 0.0
@@ -91,12 +92,16 @@ class Stanley(Node):
         self.publish_raceline(self.x_ref, self.y_ref)
 
     def print_info(self):
-        print(f'raceline conversion time = {self.race_conv_time*1000:.2f}ms')
+        if not self.ready_flag:
+            return
+        print(f'pipeline load = {self.callback_time/0.025:.2f}%')
+        print(f'raceline conversion load = {self.race_conv_time/0.025:.2f}%')
 
     def odom_callback(self, odometry_info: Odometry):
         self.pose_callback(odometry_info.pose)
 
     def pose_callback(self, pose_stamped):
+        callback_time_start = perf_counter()
         pose = pose_stamped.pose
         x_car_map = pose.position.x
         y_car_map = pose.position.y
@@ -169,6 +174,9 @@ class Stanley(Node):
 
         self.publish_drive()
 
+        self.callback_time = perf_counter() - callback_time_start
+        self.ready_flag = True
+
     def get_speed(self):
         if params.velocities_mode.v:
             return params.velocities_coeff.v * self.v_ref
@@ -201,6 +209,8 @@ class Stanley(Node):
         self.raceline_viz.publish(raceline)
 
     def publish_markers(self):
+        if not self.ready_flag:
+            return
         point = Point()
         goal_marker = Marker()
         point.x = float(self.goal[0])
