@@ -54,6 +54,7 @@ cd $HOME
 source /opt/ros/foxy/setup.bash
 git clone https://github.com/f1tenth/f1tenth_gym
 cd f1tenth_gym && pip3 install -e .
+pip install transforms3d
 
 echo 'Installing f1tenth_gym_ros'
 
