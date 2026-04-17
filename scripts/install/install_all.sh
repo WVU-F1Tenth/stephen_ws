@@ -13,7 +13,7 @@ echo 'Cancelling...'
 return 1
 fi
 
-set -eo pipefail
+set -o pipefail
 
 # Ros2 Foxy
 
@@ -76,7 +76,7 @@ colcon build
 echo 'Writing Aliases'
 
 echo "alias sim='cd ~/sim_ws/; \
-source install/local_setup.bash; \
+source install/setup.bash; \
 ros2 launch f1tenth_gym_ros gym_bridge_launch.py'" >> ~/.bashrc
 
 echo "source /opt/ros/foxy/setup.bash" >> ~/.bashrc
@@ -84,5 +84,3 @@ echo "source /opt/ros/foxy/setup.bash" >> ~/.bashrc
 echo "source /usr/share/colcon_argcomplete/hook/colcon-argcomplete.bash" >> ~/.bashrc
 
 source ~/.bashrc
-
-echo 'Installation complete, restart shell...'
