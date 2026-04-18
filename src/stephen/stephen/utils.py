@@ -161,7 +161,7 @@ def map_to_car(x, y, yaw, x_c, y_c, yaw_c):
     s = np.sin(yaw_c)
     x_car = c * dx + s * dy
     y_car = -s * dx + c * dy
-    yaw_car = np.arctan2(np.sin(yaw - yaw_c), np.cos(yaw - yaw_c))
+    yaw_car = np.arctan2(np.sin(yaw - yaw_c), np.cos(yaw - yaw_c)) + np.pi/2
     return x_car, y_car, yaw_car
 
 def car_to_map(x, y, yaw, x_c, y_c, yaw_c):

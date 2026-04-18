@@ -13,13 +13,11 @@ import math
 import os
 from .io_utils import Binding, DualBinding, KeyBindings
 from dataclasses import dataclass
-from .utils import quat_to_yaw, RacelineSpline, Raceline
+from .utils import map_to_car, quat_to_yaw, RacelineSpline, Raceline
 from scipy.interpolate import splprep, splev
 from time import perf_counter
-
-# Notes:
-#   spline cw doesn't work
-#   Angles are off, check car axes
+from pyclothoids import Clothoid
+from std_msgs.msg import ColorRGBA
 
 map_path = os.environ.get('MAP_PATH')
 if map_path is None:
@@ -35,7 +33,7 @@ class Config:
     wheelbase: float = 0.33
     max_steer: float = 0.33
     viz_rate: float = 5.0
-    use_spline: bool = True
+    use_spline: bool = False
 config = Config()
 
 # Numeric parameters adjustable by keyboard
@@ -49,14 +47,15 @@ params = KeyBindings(
     proportional_lookahead=Binding('velocity proportional lookahead', 'p', False)
 )
 
-class Stanley(Node):
+class ClothoidFollow(Node):
     def __init__(self):
-        super().__init__('stanley_node')
+        super().__init__('clothoid_follow_node')
         
         # Create ROS subscribers and publishers
         self.pub_drive = self.create_publisher(AckermannDriveStamped, '/drive', 10)
         self.raceline_viz = self.create_publisher(Marker, '/viz/raceline', 10)
         self.goal_viz = self.create_publisher(Marker, '/viz/goal', 10)
+        self.points1_pub = self.create_publisher(Marker, '/viz/points1', 1)
         if config.simulation:
             self.sub_odom = self.create_subscription(Odometry, '/ego_racecar/odom', self.odom_callback,  1)
         else:
@@ -66,6 +65,7 @@ class Stanley(Node):
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
         self.keyboard_timer = self.create_timer(.2, params.check_input)
         self.print_timer = self.create_timer(1.0, self.print_info)
+        self.ready_flag = False
 
         self.angle = 0.0
         self.speed = 0.0
@@ -91,24 +91,26 @@ class Stanley(Node):
         self.publish_raceline(self.x_ref, self.y_ref)
 
     def print_info(self):
+        if not self.ready_flag:
+            return
         print(f'raceline conversion time = {self.race_conv_time*1000:.2f}ms')
+
+    def car_xyyaw(self):
+        yaw = quat_to_yaw(self.pose.orientation)
+        x = self.pose.position.x + config.wheelbase * math.cos(yaw)
+        y = self.pose.position.y + config.wheelbase * math.sin(yaw)
+        return x, y, yaw
 
     def odom_callback(self, odometry_info: Odometry):
         self.pose_callback(odometry_info.pose)
 
     def pose_callback(self, pose_stamped):
-        pose = pose_stamped.pose
-        x_car_map = pose.position.x
-        y_car_map = pose.position.y
-        heading_car_map = quat_to_yaw(pose.orientation)
+        self.pose = pose_stamped.pose
+        x_car_map, y_car_map, yaw_car_map = self.car_xyyaw()
 
         lookahead = (params.lookahead.v * self.speed
                      if params.proportional_lookahead.v
                      else params.lookahead.v)
-
-        # Project to front axle
-        x_car_map = x_car_map + config.wheelbase * math.cos(heading_car_map)
-        y_car_map = y_car_map + config.wheelbase * math.sin(heading_car_map)
         
         # Find goal point (arc length lookahead)
         if config.use_spline:
@@ -132,35 +134,21 @@ class Stanley(Node):
             goal_index = np.searchsorted(relative_dists, lookahead) % d.size
             # Get goal index params
             x_goal_map, y_goal_map = self.x_ref[goal_index], self.y_ref[goal_index]
-            heading_goal_map = self.yaw_ref[goal_index]
+            yaw_goal_map = self.yaw_ref[goal_index]
             self.v_ref = self.velocities[goal_index]
             self.goal = self.x_ref[goal_index], self.y_ref[goal_index]
             self.race_conv_time = perf_counter() - race_conv_start
 
         # ===================================================================================
 
-        # feedforward_term = 
-
-        # yaw_damping = 
-
-        if config.ccw:
-            heading_error = math.atan2(
-                math.cos(-(heading_goal_map - heading_car_map)),
-                math.sin(-(heading_goal_map - heading_car_map))
-            )
-        else:
-            heading_error = math.atan2(
-                -math.cos(-(heading_goal_map - heading_car_map)),
-                -math.sin(-(heading_goal_map - heading_car_map))
-            )
-        heading_term = params.k_heading.v * heading_error
-
-        crosstrack_error = ((x_car_map - x_goal_map) * math.sin(heading_car_map) - 
-                            (y_car_map - y_goal_map) * math.cos(heading_car_map))
-        cross_track_term = math.atan2((params.k_error.v * crosstrack_error), (1.0 + self.speed))
-
-        delta = heading_term + cross_track_term # + yaw_damping + feedforward_term
-
+            x_car, y_car, yaw_car = map_to_car(x_goal_map, y_goal_map, yaw_goal_map, x_car_map, y_car_map, yaw_car_map)
+            c = Clothoid.G1Hermite(0.0, 0.0, self.angle, x_car, y_car, yaw_car)
+            self.clothoid = c.SampleXY(20)
+            x = c.X(lookahead)
+            y = c.Y(lookahead)
+            yaw = c.Theta(lookahead)
+            delta = np.arctan2(y, x)
+        
         # ===================================================================================
 
         self.angle = np.clip(delta, -config.max_steer, config.max_steer)
@@ -168,6 +156,7 @@ class Stanley(Node):
         self.speed = self.get_speed()
 
         self.publish_drive()
+        self.ready_flag = True
 
     def get_speed(self):
         if params.velocities_mode.v:
@@ -201,6 +190,8 @@ class Stanley(Node):
         self.raceline_viz.publish(raceline)
 
     def publish_markers(self):
+        if not self.ready_flag:
+            return
         point = Point()
         goal_marker = Marker()
         point.x = float(self.goal[0])
@@ -218,10 +209,26 @@ class Stanley(Node):
         goal_marker.color.r = 1.0
         self.goal_viz.publish(goal_marker)
 
+        points2 = [Point(x=point[0],
+                        y=point[1],
+                        z=0.2) for point in zip(self.clothoid[0], self.clothoid[1])]
+        m = Marker()
+        m.header.frame_id = '/ego_racecar/laser'
+        m.header.stamp = self.get_clock().now().to_msg()
+        m.ns = 'points2'
+        m.id = 0
+        m.type = Marker.POINTS
+        m.action = Marker.ADD
+        m.scale.x = 0.1
+        m.scale.y = 0.1
+        m.color = ColorRGBA(r=0.0, g=1.0, b=0.0, a=1.0)
+        m.points = points2
+        self.points1_pub.publish(m)
+
 def main(args=None):
     rclpy.init(args=args)
-    print("Stanley Initialized")
-    node = Stanley()
+    print("Clothoid Follow Initialized")
+    node = ClothoidFollow()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

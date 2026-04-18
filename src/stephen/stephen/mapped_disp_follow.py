@@ -62,7 +62,8 @@ params = KeyBindings(
     disparity_threshold=Binding('disparity threshold', 't', 0.5),
     steering_velocity=Binding('steering velocity', 'w', 0.0),
     map_extension=Binding('map extension', 'e', 0.45),
-    lookahead=Binding('lookahead', 'l', 0.15)
+    lookahead=Binding('lookahead', 'l', 0.15),
+    intersect_threshold=Binding('intersect threshold', 'x', 2.0)
 )
 
 @dataclass
@@ -119,6 +120,10 @@ class DisparityFollow(Node):
         if not self.scan_flag:
             self.scan_flag = True
             self.scan = Scan(scan)
+
+        if not hasattr(self, 'pose'):
+            print('Waiting on pose')
+            return
         
         self.ranges = np.asarray(scan.ranges, dtype=np.float32)
 
@@ -126,6 +131,9 @@ class DisparityFollow(Node):
         # =================== Pipeline ========================
             
             pipeline_start = perf_counter()
+
+            # Car pose in map frame
+            self.x_car, self.y_car, self.yaw_car = self.car_xyyaw()
 
             # self.apply_range_limit(ranges, 10.0)
 
@@ -135,13 +143,30 @@ class DisparityFollow(Node):
 
             pos_disps, neg_disps = self.disparities(self.ranges)
 
-            self.paths = self.get_paths(pos_disps, neg_disps)
+            self.xr, self.xtheta = nearest_object_intersect(
+            self.scan.angles,
+            self.virtual,
+            np.vstack((self.raceline.x_ref, self.raceline.y_ref)),
+            (self.x_car, self.y_car, self.yaw_car)
+            )
 
-            self.path = self.choose(self.paths)
+            # If intersect is close, choose path
+            if self.xr < params.intersect_threshold.v:
+                # Potential paths
+                self.paths = self.get_paths(pos_disps, neg_disps)
 
-            steering_time_start = perf_counter()
-            steering_angle = self.get_steering(self.path)
-            self.steering_time = perf_counter() - steering_time_start
+                # Choose path
+                self.path = self.choose(self.paths)
+
+                # Steering for path
+                steering_time_start = perf_counter()
+                steering_angle = self.path_steering(self.path)
+                self.steering_time = perf_counter() - steering_time_start
+
+            # Else intersect is far, steer using reference
+            else:
+                pass
+
 
             self.steering_angle, self.steering_velocity = self.get_smooth(steering_angle, self.speed)
 
@@ -232,25 +257,15 @@ class DisparityFollow(Node):
             path.vdepth = virtual[goal]
             path.vangle = self.scan.index_to_angle(goal)
             self.vdisps = vdisps
-    
+
     def choose(self, paths):
-        if not hasattr(self, 'pose'):
-            raise RuntimeError('Pose not set yet')
         # Pick disp closest to raceline
-        x_car, y_car, yaw_car = self.car_xyyaw()
-        r, theta = nearest_object_intersect(
-            self.scan.angles,
-            self.ranges,
-            np.vstack((self.raceline.x_ref, self.raceline.y_ref)),
-            (x_car, y_car, yaw_car)
-        )
-        self.intersect_r, self.intersect_theta = r, theta
-        path_idxs = np.asarray([path.angle for path in paths])
-        p = paths[np.argmin(np.abs(path_idxs - theta))]
+        path_angles = np.asarray([path.angle for path in paths])
+        p = paths[np.argmin(np.abs(path_angles - self.xtheta))]
         # Find path info
         pvx = p.vdepth*np.cos(p.vangle)
         pvy = p.vdepth*np.sin(p.vangle)
-        pvx, pvy, _ = car_to_map(pvx, pvy, 0.0, x_car, y_car, yaw_car)
+        pvx, pvy, _ = car_to_map(pvx, pvy, 0.0, self.x_car, self.y_car, self.yaw_car)
         self.pvx = pvx
         self.pvy = pvy
         # Find ref nearest path
@@ -261,14 +276,10 @@ class DisparityFollow(Node):
         self.ref_idx = ref_idx
         return p
 
-    def get_steering(self, path):
-        if path is None:
-            print('no path')
-            return self.steering_angle
+    def path_steering(self, path):
         lookahead = params.lookahead.v
         # Transform to car frame
-        car_yaw = quat_to_yaw(self.pose.orientation)
-        goal_yaw = (self.raceline.yaw_ref[path.ref_idx] - car_yaw) + np.pi/2
+        goal_yaw = (self.raceline.yaw_ref[path.ref_idx] - self.yaw_car) + np.pi/2
         goal_yaw = np.arctan2(np.sin(goal_yaw), np.cos(goal_yaw))
         goal_x = path.vdepth*np.cos(path.vangle)
         goal_y = path.vdepth*np.sin(path.vangle)
