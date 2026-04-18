@@ -13,10 +13,10 @@ from geometry_msgs.msg import Point, PoseStamped
 from std_msgs.msg import ColorRGBA
 from dataclasses import dataclass
 from .io_utils import Binding, DualBinding, KeyBindings
-from .disp_utils import Scan, get_virtual, nearest_object_intersect, nearest_object_intersect2
+from .disp_utils import Scan, get_virtual, nearest_object_intersect
 from pathlib import Path as FilePath
 import os
-from .utils import Raceline, car_to_map, quat_to_yaw
+from .utils import Raceline, car_to_map, map_to_car, quat_to_yaw, threshold_index_cumulative
 import pandas as pd
 from pyclothoids import Clothoid
 
@@ -62,7 +62,8 @@ params = KeyBindings(
     disparity_threshold=Binding('disparity threshold', 't', 0.5),
     steering_velocity=Binding('steering velocity', 'w', 0.0),
     map_extension=Binding('map extension', 'e', 0.45),
-    lookahead=Binding('lookahead', 'l', 0.15),
+    lookahead=Binding('lookahead', 'l', 1.0),
+    clothoid_lookahead=Binding('clothoid_lookahead', 'q', 0.1),
     intersect_threshold=Binding('intersect threshold', 'x', 2.0)
 )
 
@@ -165,8 +166,24 @@ class DisparityFollow(Node):
 
             # Else intersect is far, steer using reference
             else:
-                pass
-
+                dx = self.x_car - self.raceline.x_ref
+                dy = self.y_car - self.raceline.y_ref
+                d = np.hypot(dx, dy)
+                nearest_idx = np.argmin(d)
+                goal_idx = threshold_index_cumulative(d,
+                                                      nearest_idx,
+                                                      params.lookahead.v)
+                x_goal_map = self.raceline.x_ref[goal_idx]
+                y_goal_map = self.raceline.y_ref[goal_idx]
+                yaw_goal_map = self.raceline.yaw_ref[goal_idx]
+                x_goal_car, y_goal_car, yaw_goal_car = map_to_car(
+                    x_goal_map, y_goal_map, yaw_goal_map, self.x_car, self.y_car, self.yaw_car)
+                c = Clothoid.G1Hermite(0.0, 0.0, self.steering_angle, x_goal_car, y_goal_car, yaw_goal_car)
+                clookahead = params.clothoid_lookahead.v
+                x = c.X(clookahead)
+                y = c.Y(clookahead)
+                yaw = c.Theta(clookahead)
+                delta = np.arctan2(y, x)
 
             self.steering_angle, self.steering_velocity = self.get_smooth(steering_angle, self.speed)
 
@@ -181,8 +198,6 @@ class DisparityFollow(Node):
             return
 
         self.publish_drive(self.speed, 1.0, self.steering_angle, self.steering_velocity)
-        self.v1 = self.ranges
-        self.v2 = self.virtual
 
         self.ready_flag = True
 
@@ -190,7 +205,7 @@ class DisparityFollow(Node):
         if not self.ready_flag:
             return
         print(f'pipeline load {self.pipeline_time/0.025:.2f}%\n')
-        # print(f'virtual time load {self.get_virtual_time/0.025:.2f}%')
+        print(f'virtual time load {self.get_virtual_time/0.025:.2f}%')
         print(f'steering load {self.steering_time/0.025:.4f}%')
 
     def publish_drive(self, velocity, acceleration, steering_angle, steering_velocity):

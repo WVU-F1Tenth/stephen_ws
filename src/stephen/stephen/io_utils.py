@@ -109,7 +109,7 @@ class KeyBindings:
             raise AttributeError(f"{name} key binding doesn't exist")
         
     def get_key(self):
-        rlist, _, _ = select.select([sys.stdin], [], [], 0.005)
+        rlist, _, _ = select.select([sys.stdin], [], [], 0.002)
         if rlist:
             return sys.stdin.read(1)
         return None

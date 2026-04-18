@@ -38,7 +38,7 @@ config = Config()
 
 # Numeric parameters adjustable by keyboard
 params = KeyBindings(
-    lookahead=Binding('lookahead', 'l', 0.05),
+    lookahead=Binding('lookahead', 'l', 1.0),
     acceleration=Binding('acceleration', 'a', 0.0),
     velocities_coeff=Binding('velocities coefficient', 'v', 0.0),
     k_error=Binding('cross-track error gain', 'e', 0.5),

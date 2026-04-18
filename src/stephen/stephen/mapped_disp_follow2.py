@@ -18,7 +18,6 @@ from pathlib import Path as FilePath
 import os
 from .utils import Raceline, quat_to_yaw
 import pandas as pd
-from numba import njit
 
 
 map_path = os.environ.get('MAP_PATH')
@@ -230,20 +229,23 @@ class DisparityFollow(Node):
             path.vdepth = virtual[goal]
             path.vangle = self.scan.index_to_angle(goal)
             self.vdisps = vdisps
+
+    def car_xyyaw(self):
+        yaw = quat_to_yaw(self.pose.orientation)
+        x = self.pose.position.x + config.wheelbase * math.cos(yaw)
+        y = self.pose.position.y + config.wheelbase * math.sin(yaw)
+        return x, y, yaw
     
     def choose(self, paths):
         if not hasattr(self, 'pose'):
             raise RuntimeError('Pose not set yet')
         # Pick disp closest to raceline
-        x_car = self.pose.position.x
-        y_car = self.pose.position.y
-        yaw_car = quat_to_yaw(self.pose.orientation)
+        x_car, y_car, yaw_car = self.car_xyyaw()
         r, theta = nearest_object_intersect(
             self.scan.angles,
             self.ranges,
             np.vstack((self.raceline.x_ref, self.raceline.y_ref)),
             (x_car, y_car, yaw_car),
-            config.wheelbase
         )
         self.intersect_r, self.intersect_theta = r, theta
         path_idxs = np.asarray([path.angle for path in paths])
