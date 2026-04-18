@@ -76,33 +76,6 @@ def get_virtual(ranges: np.ndarray, angle_increment: np.float32, extension: np.f
         new_ranges[max(0, i-j): min(n, i+j+1)] = np.minimum(new_ranges[max(0, i-j): min(n, i+j+1)], ranges[i])
     return new_ranges
 
-#TODO: FIX
-def nearest_object_intersect2(scan_theta, scan_ranges, path, car_pos):
-    """
-    Returns scan index of nearest forward object intersect from car.
-    """
-    N = scan_ranges.size
-    dx = path[0] - car_pos[0]
-    dy = path[1] - car_pos[1]
-    ref_r = np.hypot(dx, dy)
-    ref_theta = (-np.arctan2(dx, dy) + 2*np.pi) % (2*np.pi)
-    scan_theta = (scan_theta + 2*np.pi) % (2*np.pi)
-    order = np.argsort(ref_theta)
-    ref_theta_s = ref_theta[order]
-    ref_r_s = ref_r[order]
-    ref_theta_p = np.empty((ref_theta.size + 1))
-    ref_r_p = np.empty((ref_r.size + 1))
-    ref_theta_p[:-1] = ref_theta_s
-    ref_theta_p[-1] = ref_theta_s[0]+2*np.pi
-    ref_r_p[:-1] = ref_r_s
-    ref_r_p[-1] = ref_r_s[0]
-    ref_r_adjusted = np.interp(scan_theta, ref_theta_p, ref_r_p)
-    hits = scan_ranges < ref_r_adjusted
-    if not np.any(hits):
-        return -1
-    return np.argmin(np.where(hits, scan_ranges, np.inf))
-
-
 @njit
 def nearest_object_intersect(scan_angles, scan_ranges, ref, car_xyyaw):
     """

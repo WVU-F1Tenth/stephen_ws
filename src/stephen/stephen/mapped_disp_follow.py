@@ -100,7 +100,7 @@ class DisparityFollow(Node):
             self.points2_pub = self.create_publisher(Marker, '/viz/points2', 10)
         if config.publish_points3:
             self.points3_pub = self.create_publisher(Marker, '/viz/points3', 10)
-        if config.publish_points3:
+        if config.publish_points4:
             self.points4_pub = self.create_publisher(Marker, '/viz/points4', 10)
 
         df = pd.read_csv(CSV_PATH, header=0, comment='#', sep=';')
@@ -143,14 +143,12 @@ class DisparityFollow(Node):
             self.get_virtual_time = (perf_counter() - get_virtual_start) * 1_000
 
             pos_disps, neg_disps = self.disparities(self.ranges)
-
             self.xr, self.xtheta = nearest_object_intersect(
             self.scan.angles,
             self.virtual,
             np.vstack((self.raceline.x_ref, self.raceline.y_ref)),
             (self.x_car, self.y_car, self.yaw_car)
             )
-
             # If intersect is close, choose path
             if self.xr < params.intersect_threshold.v:
                 # Potential paths
@@ -161,7 +159,7 @@ class DisparityFollow(Node):
 
                 # Steering for path
                 steering_time_start = perf_counter()
-                steering_angle = self.path_steering(self.path)
+                delta = self.path_steering(self.path)
                 self.steering_time = perf_counter() - steering_time_start
 
             # Else intersect is far, steer using reference
@@ -170,7 +168,7 @@ class DisparityFollow(Node):
                 dy = self.y_car - self.raceline.y_ref
                 d = np.hypot(dx, dy)
                 nearest_idx = np.argmin(d)
-                goal_idx = threshold_index_cumulative(d,
+                goal_idx, _ = threshold_index_cumulative(d,
                                                       nearest_idx,
                                                       params.lookahead.v)
                 x_goal_map = self.raceline.x_ref[goal_idx]
@@ -179,13 +177,14 @@ class DisparityFollow(Node):
                 x_goal_car, y_goal_car, yaw_goal_car = map_to_car(
                     x_goal_map, y_goal_map, yaw_goal_map, self.x_car, self.y_car, self.yaw_car)
                 c = Clothoid.G1Hermite(0.0, 0.0, self.steering_angle, x_goal_car, y_goal_car, yaw_goal_car)
+                self.clothoid = c.SampleXY(20)
                 clookahead = params.clothoid_lookahead.v
                 x = c.X(clookahead)
                 y = c.Y(clookahead)
                 yaw = c.Theta(clookahead)
                 delta = np.arctan2(y, x)
 
-            self.steering_angle, self.steering_velocity = self.get_smooth(steering_angle, self.speed)
+            self.steering_angle, self.steering_velocity = self.get_smooth(delta, self.speed)
 
             self.speed = self.get_speed(self.path)
             
@@ -241,7 +240,6 @@ class DisparityFollow(Node):
         return (pos_disp, neg_disp + 1)
     
     def get_paths(self, pos_disps: np.ndarray, neg_disps: np.ndarray):
-        # Satisfiability: 1. disp radius, 2. arc path, 3. minimum arc radius
         paths = ([Path(disp, self.ranges[int(disp)], 1) for disp in pos_disps] +
                  [Path(disp, self.ranges[int(disp)], -1) for disp in neg_disps])
         
@@ -294,14 +292,22 @@ class DisparityFollow(Node):
     def path_steering(self, path):
         lookahead = params.lookahead.v
         # Transform to car frame
-        goal_yaw = (self.raceline.yaw_ref[path.ref_idx] - self.yaw_car) + np.pi/2
-        goal_yaw = np.arctan2(np.sin(goal_yaw), np.cos(goal_yaw))
-        goal_x = path.vdepth*np.cos(path.vangle)
-        goal_y = path.vdepth*np.sin(path.vangle)
+        goal_x, goal_y, goal_yaw = map_to_car(
+            self.raceline.x_ref[path.ref_idx],
+            self.raceline.y_ref[path.ref_idx],
+            self.raceline.yaw_ref[path.ref_idx],
+            self.x_car,
+            self.y_car,
+            self.yaw_car
+        )
+        v_r = path.vdepth
+        v_theta = path.vangle
+        goal_x = v_r*np.cos(v_theta)
+        goal_y = v_r*np.sin(v_theta)
         self.goal_x = goal_x
         self.goal_y = goal_y
         self.goal_yaw = goal_yaw
-        c = Clothoid.G1Hermite(0.0, 0.0, 0.0, goal_x, goal_y, goal_yaw)
+        c = Clothoid.G1Hermite(0.0, 0.0, self.steering_angle, goal_x, goal_y, goal_yaw)
         self.clothoid = c.SampleXY(20)
         x = c.X(lookahead)
         y = c.Y(lookahead)
