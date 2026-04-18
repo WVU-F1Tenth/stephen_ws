@@ -64,7 +64,7 @@ params = KeyBindings(
     map_extension=Binding('map extension', 'e', 0.45),
     lookahead=Binding('lookahead', 'l', 3.0),
     clothoid_lookahead=Binding('clothoid lookahead', 'q', 0.1),
-    intersect_threshold=Binding('intersect threshold', 'x', 2.0)
+    intersect_threshold=Binding('intersect threshold', 'x', 3.0)
 )
 
 @dataclass
@@ -283,7 +283,7 @@ class DisparityFollow(Node):
 
     def path_steering(self, path):
         # Transform to car frame
-        ref_x, ref_y, ref_yaw = map_to_car(
+        goal_x, goal_y, goal_yaw = map_to_car(
             self.raceline.x_ref[path.ref_idx],
             self.raceline.y_ref[path.ref_idx],
             self.raceline.yaw_ref[path.ref_idx],
@@ -293,20 +293,12 @@ class DisparityFollow(Node):
         )
         v_r = path.vdepth
         v_theta = path.vangle
-        ref_theta = np.arctan2(ref_y, ref_x)
-        dir = path.sign
-        angle_incr = self.scan.angle_increment
-        goal_theta = v_theta
-        goal_idx = self.scan.angle_to_index(goal_theta)
-        while ((dir > 0 and goal_theta < ref_theta or dir < 0 and goal_theta > ref_theta) and
-                self.virtual[goal_idx]+0.001 > v_r):
-            goal_idx += dir*1
-            goal_theta += dir*angle_incr
-        goal_theta -= angle_incr
-        self.goal_x = v_r*np.cos(goal_theta)
-        self.goal_y = v_r*np.sin(goal_theta)
-        self.goal_yaw = ref_yaw
-        c = Clothoid.G1Hermite(0.0, 0.0, self.steering_angle, self.goal_x, self.goal_y, self.goal_yaw)
+        goal_x = v_r*np.cos(v_theta)
+        goal_y = v_r*np.sin(v_theta)
+        self.goal_x = goal_x
+        self.goal_y = goal_y
+        self.goal_yaw = goal_yaw
+        c = Clothoid.G1Hermite(0.0, 0.0, self.steering_angle, goal_x, goal_y, goal_yaw)
         self.clothoid = c.SampleXY(20)
         clookahead = params.clothoid_lookahead.v
         x = c.X(clookahead)
