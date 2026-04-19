@@ -72,6 +72,7 @@ class Path:
     depth:np.float32
     sign: int
     angle: np.float32 = np.float32(0.0)
+    vsign: int = 0
     vindex: int = 0
     vdepth: np.float32 = np.float32(0.0)
     vangle: np.float32 = np.float32(0.0)
@@ -219,12 +220,18 @@ class DisparityFollow(Node):
         pdisps, ndisps = self.disparities(virtual)
         if pdisps.size == 0 and ndisps.size == 0:
             raise RuntimeError('No virtual disparities found.')
-        vdisps = np.sort(np.concatenate((pdisps, ndisps)))
+        vdisps = np.concatenate((pdisps, ndisps))
         for path in paths:
             diff = np.abs(vdisps - path.index)
-            nearest = vdisps[np.argmin(diff)]
+            nearest_idx = np.argmin(diff)
+            vsign = 1 if nearest_idx < pdisps.size else -1
+            # print(vdisps)
+            # print(nearest_idx)
+            # print(f'{vsign=}\n')
+            nearest = vdisps[nearest_idx]
             neighborhood = vdisps[np.abs(vdisps - nearest) <= 10]
             goal = neighborhood[np.argmax(virtual[neighborhood])]
+            path.vsign = vsign
             path.vindex = goal
             path.vdepth = virtual[goal]
             path.vangle = self.scan.index_to_angle(goal)

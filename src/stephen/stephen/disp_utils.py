@@ -1,11 +1,7 @@
 from numba import njit
-from scipy.spatial.transform import Rotation
-from geometry_msgs.msg import Quaternion, Pose
 import math
-from typing import Tuple
 import numpy as np
 from sensor_msgs.msg import LaserScan
-from dataclasses import dataclass
 
 class Scan:
     def __init__(self, scan: LaserScan):
@@ -64,7 +60,7 @@ def get_virtual2(ranges, angle_increment, extension):
         col_mins = range_matrix.min(axis=0)
         return col_mins
 
-@njit
+@njit(cache=True)
 def get_virtual(ranges: np.ndarray, angle_increment: np.float32, extension: np.float32) -> np.ndarray:
     n = len(ranges)
     ratio = extension / (2 * ranges)
@@ -76,7 +72,7 @@ def get_virtual(ranges: np.ndarray, angle_increment: np.float32, extension: np.f
         new_ranges[max(0, i-j): min(n, i+j+1)] = np.minimum(new_ranges[max(0, i-j): min(n, i+j+1)], ranges[i])
     return new_ranges
 
-@njit
+@njit(cache=True)
 def nearest_object_intersect(scan_angles, scan_ranges, ref, car_xyyaw):
     """
     Returns scan index of nearest forward object intersect from car.
@@ -100,3 +96,53 @@ def nearest_object_intersect(scan_angles, scan_ranges, ref, car_xyyaw):
             return r, theta
         idx = (idx + 1) % dx.size
     raise RuntimeError('No object intersection found')
+
+@njit(cache=True)
+def max_point_radius(dir, ranges, angle_increment, point_idx):
+    if dir > 0:
+        side_a = ranges[point_idx]
+        side_a_2 = side_a**2
+        idx = point_idx + 1
+        radius = ranges[idx]
+        theta = angle_increment
+        while radius > (2 * side_a * np.sin(theta/2)) and idx < ranges.size - 1:
+            idx += 1
+            theta += angle_increment
+            side_b = ranges[idx]
+            r = np.sqrt(side_a_2 + side_b**2 - 2*side_a*side_b*np.cos(theta))
+            if r < radius:
+                radius = r
+    elif dir < 0:
+        side_a = ranges[point_idx]
+        side_a_2 = side_a**2
+        idx = point_idx - 1
+        radius = ranges[idx]
+        theta = angle_increment
+        while radius > (2 * side_a * np.sin(theta/2)) and idx > 0:
+            idx -= 1
+            theta += angle_increment
+            side_b = ranges[idx]
+            r = np.sqrt(side_a_2 + side_b**2 - 2*side_a*side_b*np.cos(theta))
+            if r < radius:
+                radius = r
+    # print(dir)
+    # print(radius)
+    # print()
+    return radius, theta
+    
+@njit(cache=True)
+def radial_extension_to_path(dir, r_start, theta_start, r_ref, theta_ref):
+    # Sort ref points
+    sort = np.argsort(theta_ref)
+    r_ref = r_ref[sort]
+    theta_ref = theta_ref[sort]
+    # Get limit in angle
+    idx = np.searchsorted(theta_ref, theta_start)
+    if dir > 0:
+        while not np.isclose(r_start, r_ref[idx], atol=0.1) and idx < theta_ref.size:
+            idx += 1
+    elif dir < 0:
+        while not np.isclose(r_start, r_ref[idx], atol=0.1) and idx > 0:
+            idx -= 1
+    return theta_ref[idx]
+        

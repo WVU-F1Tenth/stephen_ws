@@ -58,15 +58,6 @@ def yaw_to_quat(yaw):
 def normalize_angle(angle):
         return math.atan2(math.sin(angle), math.cos(angle))
 
-def map_to_car_point(car_pose: Pose, map_point: Tuple[float, float]):
-    map_x, map_y = map_point
-    dx = map_x - car_pose.position.x
-    dy = map_y - car_pose.position.y
-    theta = quat_to_yaw(car_pose.orientation)
-    x_car =  math.cos(theta) * dx + math.sin(theta) * dy
-    y_car = -math.sin(theta) * dx + math.cos(theta) * dy
-    return x_car, y_car
-
 class RacelineSpline:
     def __init__(self, xref, yref, dtype, smooth=0.0, n_dense=5000):
         self.dtype = dtype
@@ -171,3 +162,9 @@ def car_to_map(x, y, yaw, x_c, y_c, yaw_c):
     y_map = y_c + s * x + c * y
     yaw_map = np.arctan2(np.sin(yaw + yaw_c), np.cos(yaw + yaw_c))
     return x_map, y_map, yaw_map
+
+def idx_nearest_point(x, y, path_x, path_y):
+    dx = x - path_x
+    dy = y - path_y
+    d = np.hypot(dx, dy)
+    return np.argmin(d)
