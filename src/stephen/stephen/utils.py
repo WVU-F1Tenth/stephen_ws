@@ -8,14 +8,15 @@ from scipy.interpolate import splev, splprep
 from scipy.optimize import minimize_scalar
 from typing import Tuple
 
-@njit
+
+@njit(cache=True)
 def threshold_index_cumulative(ar, start_index, threshold):
     """
     Returns first index from start index where
     (sum of array[start_index:index+1] > threshold) on circular array.
     If none found returns 0.
     """
-    sum = 0
+    sum = 0.0
     offset = 0
     index = start_index
     while offset < ar.size and sum <= threshold:
@@ -27,7 +28,7 @@ def threshold_index_cumulative(ar, start_index, threshold):
     else:
         return index, offset
 
-@njit
+@njit(cache=True)
 def threshold_index(ar, start_index, threshold):
     """
     Returns first index from start index where (array[index] > threshold) on circular array.

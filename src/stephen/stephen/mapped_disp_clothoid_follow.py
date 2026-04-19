@@ -64,9 +64,9 @@ params = KeyBindings(
     disparity_threshold=Binding('disparity threshold', 't', 0.5),
     steering_velocity=Binding('steering velocity', 'w', 0.0),
     map_extension=Binding('map extension', 'e', 0.45),
-    lookahead=Binding('lookahead', 'l', 2.0),
+    lookahead=Binding('lookahead', 'l', 1.0),
     clothoid_lookahead=Binding('clothoid lookahead', 'q', 0.1),
-    intersect_threshold=Binding('intersect threshold', 'x', 2.0)
+    intersect_threshold=Binding('intersect threshold', 'x', 1.0)
 )
 
 @dataclass
@@ -264,9 +264,6 @@ class DisparityFollow(Node):
             diff = np.abs(vdisps - path.index)
             nearest_idx = np.argmin(diff)
             vsign = 1 if nearest_idx < pdisps.size else -1
-            # print(vdisps)
-            # print(nearest_idx)
-            # print(f'{vsign=}\n')
             nearest = vdisps[nearest_idx]
             neighborhood = vdisps[np.abs(vdisps - nearest) <= 10]
             goal = neighborhood[np.argmax(virtual[neighborhood])]
@@ -304,28 +301,12 @@ class DisparityFollow(Node):
             self.y_car,
             self.yaw_car
         )
-        theta_ref = np.arctan2(ref_y, ref_x)
-        r_ref = np.hypot(ref_x, ref_y)
         v_r = path.vdepth
         v_theta = path.vangle
-        v_idx = path.vindex
         self.pv_theta, self.pv_r = v_theta, v_r
-        dir = path.vsign
-        angle_increment = self.scan.angle_increment
-        radius, radius_theta_diff = max_point_radius(dir, self.virtual, angle_increment, v_idx)
-        theta_to_path = radial_extension_to_path(dir, v_r, v_theta, r_ref, theta_ref)
-        theta_to_path_diff = np.abs(theta_to_path - v_theta)
-        # radius_theta_diff = 2*np.sin(radius/(2*v_r))
-        radius_theta = v_theta + dir * radius_theta_diff/2
-        if radius_theta_diff < theta_to_path_diff:
-            goal_theta = radius_theta
-            print(f'{radius_theta = }')
-        else:
-            goal_theta = theta_to_path
-            # print(f'{theta_to_path = }')
         # Set goal points in car frame
-        self.goal_x = v_r*np.cos(goal_theta)
-        self.goal_y = v_r*np.sin(goal_theta)
+        self.goal_x = v_r*np.cos(v_theta)
+        self.goal_y = v_r*np.sin(v_theta)
         self.goal_yaw = ref_yaw[idx_nearest_point(
             self.goal_x,
             self.goal_y,
