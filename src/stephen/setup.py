@@ -32,7 +32,8 @@ setup(
             'stanley=stephen.stanley:main',
             'mpc=stephen.mpc:main',
             'dynamic_mpc=stephen.dynamic_mpc:main',
-            'clothoid_follow=stephen.clothoid_follow:main'
+            'clothoid_follow=stephen.clothoid_follow:main',
+            'mapped_follow=stephen.mapped_follow:main'
         ],
     },
 )

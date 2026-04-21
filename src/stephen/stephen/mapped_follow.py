@@ -31,12 +31,8 @@ if not CSV_PATH.exists():
 class Config:
     simulation: bool = False
     ccw: bool = True
-    # Algorithm parameters
-    disparity_threshold: float = 0.5
-    map_extension: float = 0.25
-    steering_velocity: float = 0.0
     # Speed parameters
-    speed_method: str = 'fast' # 'flat' or 'fast'
+    speed_method: str = 'flat' # 'flat' or 'fast'
     max_speed: float = 100.0
     v_min: float = 1.0
     a_slide: float = 14.0
@@ -46,7 +42,6 @@ class Config:
     max_steer: float = 0.38
     # Output parameters
     viz_rate: float = 0.2
-    file_output: bool = True
     publish_points1: bool = True
     publish_points2: bool = True
     publish_points3: bool = True
@@ -91,7 +86,7 @@ class DisparityFollow(Node):
         self.viz_timer = self.create_timer(config.viz_rate, self.publish_markers)
         self.raceline_viz = self.create_publisher(Marker, '/viz/raceline', 10)
         self.keyboard_timer = self.create_timer(.2, params.check_input)
-        self.print_timer = self.create_timer(1.0, self.print_info)
+        self.print_timer = self.create_timer(3.0, self.print_info)
         self.line_marker_pub = self.create_publisher(Marker, '/viz/goal', 10)
         if config.publish_v1:
             self.v1_pub = self.create_publisher(Float32MultiArray, '/v1_ranges', 10)
@@ -121,6 +116,7 @@ class DisparityFollow(Node):
         self.publish_raceline(self.raceline.x_ref, self.raceline.y_ref)
         
     def adjust(self, scan: LaserScan):
+        adjust_start = perf_counter()
         if not self.scan_flag:
             self.scan_flag = True
             self.scan = Scan(scan)
@@ -131,10 +127,7 @@ class DisparityFollow(Node):
 
         try:
         # =================== Pipeline ========================
-            
             pipeline_start = perf_counter()
-
-            # self.apply_range_limit(ranges, 10.0)
 
             get_virtual_start = perf_counter()
             self.virtual = get_virtual(self.ranges, np.float32(self.scan.increment), np.float32(params.map_extension.v))
@@ -165,10 +158,12 @@ class DisparityFollow(Node):
         self.v2 = self.virtual
 
         self.ready_flag = True
+        self.adjust_time = perf_counter() - adjust_start
 
     def print_info(self):
         if not self.ready_flag:
             return
+        print(f'total load {self.adjust_time/0.025:.2f}%')
         print(f'pipeline load {self.pipeline_time/0.025:.2f}%')
         print(f'virtual time load {self.get_virtual_time/0.025:.2f}%\n')
 
@@ -199,7 +194,6 @@ class DisparityFollow(Node):
         return (pos_disp, neg_disp + 1)
     
     def get_paths(self, pos_disps: np.ndarray, neg_disps: np.ndarray):
-        # Satisfiability: 1. disp radius, 2. arc path, 3. minimum arc radius
         paths = ([Path(disp, self.ranges[int(disp)], 1) for disp in pos_disps] +
                  [Path(disp, self.ranges[int(disp)], -1) for disp in neg_disps])
         

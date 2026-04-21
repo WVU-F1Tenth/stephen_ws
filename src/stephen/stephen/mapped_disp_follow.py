@@ -31,7 +31,7 @@ if not CSV_PATH.exists():
 
 @dataclass
 class Config:
-    simulation: bool = True
+    simulation: bool = False
     ccw: bool = True
     # Algorithm parameters
     disparity_threshold: float = 0.5
@@ -85,8 +85,8 @@ class Path:
 class DisparityFollow(Node):
     def __init__(self):
         super().__init__('gap_follow')
-        self.drive_pub = self.create_publisher(AckermannDriveStamped, '/drive', 10)
-        self.laser_scan_sub = self.create_subscription(LaserScan, '/scan', self.adjust, 10)
+        self.drive_pub = self.create_publisher(AckermannDriveStamped, '/drive', 1)
+        self.laser_scan_sub = self.create_subscription(LaserScan, '/scan', self.adjust, 1)
         if config.simulation:
             self.sub_odom = self.create_subscription(Odometry, '/ego_racecar/odom', self.odom_callback,  1)
         else:
@@ -143,7 +143,7 @@ class DisparityFollow(Node):
 
             get_virtual_start = perf_counter()
             self.virtual = get_virtual(self.ranges, np.float32(self.scan.increment), np.float32(params.map_extension.v))
-            self.get_virtual_time = (perf_counter() - get_virtual_start) * 1_000
+            self.get_virtual_time = (perf_counter() - get_virtual_start)
 
             pos_disps, neg_disps = self.disparities(self.ranges)
             self.xr, self.xtheta = nearest_object_intersect(
@@ -193,7 +193,7 @@ class DisparityFollow(Node):
                 self.steering_angle, self.steering_velocity = self.get_smooth(delta, self.speed)
                 self.speed = self.get_ref_speed()
 
-            self.pipeline_time = (perf_counter() - pipeline_start) * 1_000
+            self.pipeline_time = (perf_counter() - pipeline_start)
 
         # =====================================================
         except RuntimeError as e:

@@ -21,7 +21,7 @@ from time import perf_counter
 from .utils import quat_to_yaw
 from .io_utils import Binding, DualBinding, KeyBindings
 
-SIMULATOR = True
+SIMULATOR = False
 
 params = KeyBindings()
 

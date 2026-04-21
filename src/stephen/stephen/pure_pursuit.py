@@ -9,11 +9,11 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 import os
-from .utils import threshold_index_cumulative
+from .utils import map_to_car, threshold_index_cumulative
 from time import perf_counter
 from dataclasses import dataclass
 from .io_utils import Binding, DualBinding, KeyBindings
-from .utils import quat_to_yaw, map_to_car_point, Raceline
+from .utils import quat_to_yaw, Raceline
 
 map_path = os.environ.get('MAP_PATH')
 if map_path is None:
@@ -24,7 +24,7 @@ if not CSV_PATH.exists():
 
 @dataclass
 class Config:
-    simulation: bool = True
+    simulation: bool = False
     ccw: bool = True
     wheelbase: float = 0.33
     max_steer: float = 0.33
@@ -126,9 +126,13 @@ class PurePursuit(Node):
             self.goal_index = np.searchsorted(relative_dists, lookahead) % self.track.point_count
 
         # Transform goal point to vehicle frame of reference
-        x_goal_car, y_goal_car = map_to_car_point(
-            pose, 
-            (self.track.x_ref[self.goal_index], self.track.y_ref[self.goal_index]))
+        x_goal_car, y_goal_car, _ = map_to_car(
+            self.track.x_ref[self.goal_index],
+            self.track.y_ref[self.goal_index],
+            0.0,
+            pose.position.x,
+            pose.position.y,
+            0.0)
 
         # Calculate curvature/steering angle
         L = np.hypot(x_goal_car, y_goal_car)

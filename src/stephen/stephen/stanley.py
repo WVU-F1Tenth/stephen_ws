@@ -30,7 +30,7 @@ if not CSV_PATH.exists():
 
 @dataclass
 class Config:
-    simulation: bool = True
+    simulation: bool = False
     ccw: bool = True
     wheelbase: float = 0.33
     max_steer: float = 0.33
