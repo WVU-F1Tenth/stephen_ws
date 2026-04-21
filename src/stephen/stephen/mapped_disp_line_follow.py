@@ -121,6 +121,9 @@ class DisparityFollow(Node):
         self.publish_raceline(self.raceline.x_ref, self.raceline.y_ref)
         
     def adjust(self, scan: LaserScan):
+        if hasattr(self, 'algorithm_start'):
+            self.algorithm_rate = 1.0 / (perf_counter() - self.algorithm_start)
+        self.algorithm_start = perf_counter()
         if not self.scan_flag:
             self.scan_flag = True
             self.scan = Scan(scan)
@@ -133,8 +136,6 @@ class DisparityFollow(Node):
         # =================== Pipeline ========================
             
             pipeline_start = perf_counter()
-
-            # self.apply_range_limit(ranges, 10.0)
 
             get_virtual_start = perf_counter()
             self.virtual = get_virtual(self.ranges, np.float32(self.scan.increment), np.float32(params.map_extension.v))
@@ -169,6 +170,8 @@ class DisparityFollow(Node):
     def print_info(self):
         if not self.ready_flag:
             return
+        if hasattr(self, 'algorithm_rate'):
+            print(f'algorithm rate {self.algorithm_rate:.2f}Hz')
         print(f'pipeline load {self.pipeline_time/0.025:.2f}%')
         print(f'virtual time load {self.get_virtual_time/0.025:.2f}%\n')
 
