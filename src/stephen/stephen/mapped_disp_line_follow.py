@@ -253,7 +253,7 @@ class DisparityFollow(Node):
         x_car, y_car, yaw_car = self.car_xyyaw()
         r, theta = nearest_object_intersect(
             self.scan.angles,
-            self.ranges,
+            self.virtual,
             np.vstack((self.raceline.x_ref, self.raceline.y_ref)),
             (x_car, y_car, yaw_car),
         )

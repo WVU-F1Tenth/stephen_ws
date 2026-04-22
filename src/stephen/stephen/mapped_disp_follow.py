@@ -31,7 +31,7 @@ if not CSV_PATH.exists():
 
 @dataclass
 class Config:
-    simulation: bool = False
+    simulation: bool = True
     ccw: bool = True
     # Algorithm parameters
     disparity_threshold: float = 0.5
@@ -125,6 +125,10 @@ class DisparityFollow(Node):
             self.scan_flag = True
             self.scan = Scan(scan)
 
+        if hasattr(self, 'algorithm_start'):
+            self.algorithm_rate = 1.0 / (perf_counter() - self.algorithm_start)
+        self.algorithm_start = perf_counter()
+
         if not hasattr(self, 'pose'):
             print('Waiting on pose')
             return
@@ -208,6 +212,8 @@ class DisparityFollow(Node):
     def print_info(self):
         if not self.ready_flag:
             return
+        if hasattr(self, 'algorithm_rate'):
+            print(f'algorithm rate {self.algorithm_rate:.2f}Hz')
         print(f'pipeline load {self.pipeline_time/0.025:.2f}%\n')
         print(f'virtual time load {self.get_virtual_time/0.025:.2f}%')
 
@@ -277,6 +283,7 @@ class DisparityFollow(Node):
             self.vdisps = vdisps
 
     def choose(self, paths):
+        
         # Pick disp closest to raceline
         path_angles = np.asarray([path.angle for path in paths])
         p = paths[np.argmin(np.abs(path_angles - self.xtheta))]
@@ -316,10 +323,9 @@ class DisparityFollow(Node):
         theta_to_path = radial_extension_to_path(dir, v_r, v_theta, r_ref, theta_ref)
         theta_to_path_diff = np.abs(theta_to_path - v_theta)
         # radius_theta_diff = 2*np.sin(radius/(2*v_r))
-        radius_theta = v_theta + dir * radius_theta_diff/2
+        radius_theta = v_theta + dir * radius_theta_diff
         if radius_theta_diff < theta_to_path_diff:
             goal_theta = radius_theta
-            print(f'{radius_theta = }')
         else:
             goal_theta = theta_to_path
             # print(f'{theta_to_path = }')

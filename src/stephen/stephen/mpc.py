@@ -86,7 +86,7 @@ class MPC(Node):
         if SIMULATOR:
             self.sub_odom = self.create_subscription(Odometry, '/ego_racecar/odom', self.odom_callback,  1)
         else:
-            self.sub_pose = self.create_subscription(Odometry, '/pf/viz/odom', self.pose_callback, 1)
+            self.sub_pose = self.create_subscription(Odometry, '/pf/odom', self.pose_callback, 1)
         self.keyboard_timer = self.create_timer(.5, params.check_input)
         self.print_timer = self.create_timer(1.0, self.print_info)
         self.mpc_solve_time = 0.0

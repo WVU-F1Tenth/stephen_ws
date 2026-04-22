@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 from numba import njit
 import math
 import numpy as np
@@ -145,4 +147,26 @@ def radial_extension_to_path(dir, r_start, theta_start, r_ref, theta_ref):
         while not np.isclose(r_start, r_ref[idx], atol=0.1) and idx > 0:
             idx -= 1
     return theta_ref[idx]
-        
+
+@dataclass
+class ProgressResult:
+    s: np.float32
+    d: np.float32
+    seg_idx: int
+    t: np.float32
+    proj_x: np.float32
+    proj_y: np.float32
+
+class LocalFrenetProgress:
+    def __init__(self, x_ref, y_ref, closed=True):
+        x_ref = np.asarray(x_ref, dtype=np.float32)
+        y_ref = np.asarray(y_ref, dtype=np.float32)
+        pts = np.column_stack((x_ref, y_ref))
+        if closed and not np.allclose(pts[0], pts[-1]):
+            pts = np.vstack((pts, pts[0]))
+        self.closed = closed
+        self.pts = pts
+        self.p0 = pts[:-1]
+        self.p1 = pts[1:]
+        self.seg = self.p1 - self.p0
+        self.seg_len = np.linalg.norm(self.seg, axis=1)
