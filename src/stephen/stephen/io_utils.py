@@ -30,10 +30,14 @@ class KeyBindings:
         bindings['speed']  = Binding('speed', 's', 0.0)
         self.params: Dict[str, Union[Binding, DualBinding]] = bindings
         self.key_dict = defaultdict(list)
+        used_keys = []
         for binding in bindings.values():
             if isinstance(binding, Binding):
-                if binding.key:
-                    self.key_dict[binding.key].append(binding)
+                assert binding.key
+                if binding.key in used_keys:
+                    raise ValueError(f'{binding.key} cannot be bound twice')
+                used_keys.append(binding.key)
+                self.key_dict[binding.key].append(binding)
             elif isinstance(binding, DualBinding):
                 if binding.on_key:
                     self.key_dict[binding.on_key].append(binding)

@@ -60,7 +60,7 @@ def normalize_angle(angle):
         return math.atan2(math.sin(angle), math.cos(angle))
 
 class RacelineSpline:
-    def __init__(self, xref, yref, dtype, smooth=0.0, n_dense=5000):
+    def __init__(self, xref, yref, dtype, smooth=20.0, n_dense=1000):
         self.dtype = dtype
         self.tck, self.u = splprep([xref, yref], per=1, s=smooth)
         self.u0, self.u1 = self.u[0], self.u[-1]
@@ -88,38 +88,97 @@ class RacelineSpline:
         u = self.wrap_u(u)
         return np.interp(u, self.u_dense, self.s_dense)
     
-    def s_to_xy(self, s) -> Tuple[float, float]:
+    def s_to_xy(self, s):
         uu = self.s_to_u(s)
         x, y = splev(uu, self.tck)
-        return (float(x), float(y)) # type: ignore
+        return x, y
+    
+    def u_to_xy(self, u):
+        return splev(u, self.tck)
     
     def s_to_heading(self, s):
         uu = self.s_to_u(s)
         dx_du, dy_du = splev(uu, self.tck, der=1)
         return -np.arctan2(dx_du, dy_du)
-
-    def xy_to_s(self, point, levels=2, n=50):
+    
+    def xy_to_u(self, point, levels=2, n=50):
         """
-        Returns spline progress closest to x, y
+        Returns spline progress as u closest to x, y
         """
         point = np.asarray(point, dtype=self.dtype)
         diff = self.xy_dense - point
         idx0 = np.argmin(np.sum(diff * diff, axis=1))
         best_u = self.u_dense[idx0]
         du = self.u_period / len(self.u_dense)
-        for _ in range(levels):
+        for _ in range(int(levels)):
             samples = best_u + np.linspace(-du, du, n, dtype=self.dtype)
             samples = self.wrap_u(samples)
             xy = np.asarray(splev(samples, self.tck), dtype=self.dtype).T
             err = np.sum((xy - point) ** 2, axis=1)
             idx = np.argmin(err)
             best_u = samples[idx]
-            du *= 0.5
+            du  = (2 * du) / (n - 1)
+        return best_u
+    
+    def xy_to_ue(self, point, levels=2, n=50):
+        """
+        Returns spline progress as u closest to x, y
+        """
+        point = np.asarray(point, dtype=self.dtype)
+        diff = self.xy_dense - point
+        idx0 = np.argmin(np.sum(diff * diff, axis=1))
+        best_u = self.u_dense[idx0]
+        du = self.u_period / len(self.u_dense)
+        for _ in range(int(levels)):
+            samples = best_u + np.linspace(-du, du, n, dtype=self.dtype)
+            samples = self.wrap_u(samples)
+            xy = np.asarray(splev(samples, self.tck), dtype=self.dtype).T
+            err = np.sum((xy - point) ** 2, axis=1)
+            idx = np.argmin(err)
+            best_u = samples[idx]
+            du  = (2 * du) / (n - 1)
+        return best_u, err[idx]
+
+    def xy_to_s(self, point, levels=2, n=50):
+        """
+        Returns spline progress as s closest to x, y
+        """
+        best_u = self.xy_to_u(point, levels, n)
         return self.u_to_s(best_u)
     
     def nearest_xy(self, point):
         return self.s_to_xy(self.xy_to_s(point))
     
+    def relative(self, origin_x, origin_y, x, y):
+        """
+        Return relative progress and signed cross-track error.
+        Positive s_rel means target is ahead along the shortest track direction.
+        Positive d means target is left of the spline tangent.
+        """
+        point = np.asarray((x, y), dtype=self.dtype)
+        origin_u = self.xy_to_u((origin_x, origin_y))
+        target_u = self.xy_to_u(point)
+        origin_s = self.u_to_s(origin_u)
+        target_s = self.u_to_s(target_u)
+        s_rel = target_s - origin_s
+        if s_rel < -0.5 * self.length:
+            s_rel += self.length
+        elif s_rel > 0.5 * self.length:
+            s_rel -= self.length
+        # closest point on spline
+        cx, cy = splev(target_u, self.tck)
+        # tangent
+        dx_du, dy_du = splev(target_u, self.tck, der=1)
+        norm = np.hypot(dx_du, dy_du)
+        if norm == 0:
+            d = np.hypot(x - cx, y - cy)
+        else:
+            tx = dx_du / norm
+            ty = dy_du / norm
+            # signed cross-track error: positive = left of tangent
+            d = tx * (y - cy) - ty * (x - cx)
+        return s_rel, d
+
 class Raceline:
     def __init__(self, df, dtype=np.float32):
         self.x_ref_closed = df.iloc[:, 1].to_numpy(dtype=dtype)
