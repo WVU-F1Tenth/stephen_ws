@@ -86,7 +86,7 @@ class MPC(Node):
         if SIMULATOR:
             self.sub_odom = self.create_subscription(Odometry, '/ego_racecar/odom', self.odom_callback,  1)
         else:
-            self.sub_pose = self.create_subscription(Odometry, '/pf/odom', self.pose_callback, 1)
+            self.sub_pose = self.create_subscription(Odometry, '/pf/pose/odom', self.pose_callback, 1)
         self.keyboard_timer = self.create_timer(.5, params.check_input)
         self.print_timer = self.create_timer(1.0, self.print_info)
         self.mpc_solve_time = 0.0
@@ -490,8 +490,8 @@ class MPC(Node):
         return mpc_a, mpc_delta, mpc_x, mpc_y, mpc_yaw, mpc_v, path_predict
     
     def print_info(self):
-        print(f'mpc solve time          {self.mpc_solve_time}')
-        print(f'total pipeline time  {self.mpc_total_time}\n')
+        print(f'mpc solve load {100*self.mpc_solve_time/0.025:.3f}%')
+        print(f'total pipeline load {100*self.mpc_total_time/0.025:.3f}%\n')
 
     def publish_raceline(self, x, y):
         raceline = Marker()

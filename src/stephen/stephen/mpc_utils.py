@@ -34,13 +34,3 @@ def nearest_point(point, trajectory):
         dists[i] = np.sqrt(np.sum(temp*temp))
     min_dist_segment = np.argmin(dists)
     return projections[min_dist_segment], dists[min_dist_segment], t[min_dist_segment], min_dist_segment
-
-def nearest_spline_sample(tck, u_max, x, y, n1=100, n2=100, n3=100):
-    """
-    Returns spline progress closest to x, y
-    """
-    def sample_space()
-    # Find nearest point
-    
-def nearest_spline_point(tck, umax, x, y):
-    pass

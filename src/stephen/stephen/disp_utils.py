@@ -48,31 +48,39 @@ class Scan:
         if depth <= 0.0:
             return 0.0
         return 2 * math.asin(span / (2 * depth))
-    
-def get_virtual2(ranges, angle_increment, extension):
-        n = len(ranges)
-        range_matrix = np.full((n, n), np.inf, dtype=np.float32)
-        ratio = extension / (2 * ranges)
-        ratio = np.clip(ratio, -1.0, 1.0)
-        index_extensions = abs(np.floor(2*np.arcsin(ratio)/angle_increment).astype(np.int32))
-        rows = np.arange(n)[:, None]
-        cols = np.arange(n)[None, :]
-        mask = np.abs(cols-rows) <= index_extensions[:, None]
-        range_matrix = np.where(mask, ranges[:, None], np.inf).astype(np.float32)
-        col_mins = range_matrix.min(axis=0)
-        return col_mins
 
 @njit(cache=True)
-def get_virtual(ranges: np.ndarray, angle_increment: np.float32, extension: np.float32) -> np.ndarray:
-    n = len(ranges)
+def get_virtual(ranges: np.ndarray, angle_increment: np.float32, extension: np.float32,
+                min_range: np.float32 = np.float32(0.3)) -> np.ndarray:
+    ranges = ranges.copy() / min_range
+    new_ranges = ranges.copy() / min_range
+    extension /= min_range
+    n = ranges.shape[0]
     ratio = extension / (2 * ranges)
     ratio = np.clip(ratio, -1.0, 1.0)
     index_extensions = np.abs(2*np.arcsin(ratio)/angle_increment).astype(np.int32)
-    new_ranges = ranges.copy()
     for i in range(n):
         j = index_extensions[i]
         new_ranges[max(0, i-j): min(n, i+j+1)] = np.minimum(new_ranges[max(0, i-j): min(n, i+j+1)], ranges[i])
-    return new_ranges
+    return new_ranges * min_range
+
+# @njit(cache=True)
+# def get_virtual(ranges: np.ndarray, angle_increment: np.float32, extension: np.float32,
+#                 min_range: np.float32 = np.float32(1e-3)) -> np.ndarray:
+#     ranges = np.asarray(ranges, dtype=np.float32)
+#     new_ranges = ranges.copy()
+#     n = ranges.shape[0]
+#     valid = np.isfinite(ranges) & (ranges > np.float32(0.0))
+#     valid_indices = np.flatnonzero(valid)
+#     safe_ranges = np.maximum(ranges[valid], min_range).astype(np.float32)
+#     half_extension = np.float32(0.5) * extension
+#     half_angles = 2*np.arctan(half_extension / safe_ranges).astype(np.float32)
+#     index_extensions = np.ceil(half_angles / angle_increment).astype(np.int32)
+#     for idx, j in zip(valid_indices, index_extensions):
+#         lo = max(0, idx - j)
+#         hi = min(n, idx + j + 1)
+#         new_ranges[lo:hi] = np.minimum(new_ranges[lo:hi], ranges[idx]).astype(np.float32)
+#     return new_ranges.astype(np.float32)
 
 @njit(cache=True)
 def nearest_object_intersect(scan_angles, scan_ranges, ref, car_xyyaw):
@@ -148,25 +156,128 @@ def radial_extension_to_path(dir, r_start, theta_start, r_ref, theta_ref):
             idx -= 1
     return theta_ref[idx]
 
+import numpy as np
+from dataclasses import dataclass
+
 @dataclass
 class ProgressResult:
-    s: np.float32
-    d: np.float32
+    s: float           # continuous unwrapped progress
+    s_raw: float       # wrapped progress in [0, track_length)
+    d: float
     seg_idx: int
-    t: np.float32
-    proj_x: np.float32
-    proj_y: np.float32
+    t: float
+    proj_x: float
+    proj_y: float
+    lap: int
 
 class LocalFrenetProgress:
-    def __init__(self, x_ref, y_ref, closed=True):
-        x_ref = np.asarray(x_ref, dtype=np.float32)
-        y_ref = np.asarray(y_ref, dtype=np.float32)
+    def __init__(self, x_ref, y_ref):
+        x_ref = np.asarray(x_ref, dtype=float)
+        y_ref = np.asarray(y_ref, dtype=float)
         pts = np.column_stack((x_ref, y_ref))
-        if closed and not np.allclose(pts[0], pts[-1]):
+        # Always closed
+        if not np.allclose(pts[0], pts[-1]):
             pts = np.vstack((pts, pts[0]))
-        self.closed = closed
+        self.closed = True
         self.pts = pts
         self.p0 = pts[:-1]
         self.p1 = pts[1:]
         self.seg = self.p1 - self.p0
         self.seg_len = np.linalg.norm(self.seg, axis=1)
+        self.seg_len_sq = self.seg_len ** 2
+        if np.any(self.seg_len_sq == 0):
+            raise ValueError("Consecutive duplicate raceline points found.")
+        self.s_cum = np.concatenate(([0.0], np.cumsum(self.seg_len)))
+        self.track_length = self.s_cum[-1]
+        self.num_seg = len(self.seg)
+        self.last_seg_idx = 0
+        self.initialized = False
+        # Internal continuous progress state
+        self.s_continuous = None
+
+    def _candidate_indices(self, center_idx, window):
+        return [(center_idx + k) % self.num_seg for k in range(-window, window + 1)]
+
+    def _project_to_segment(self, qx, qy, i):
+        p0 = self.p0[i]
+        seg = self.seg[i]
+        seg_len_sq = self.seg_len_sq[i]
+        wx = qx - p0[0]
+        wy = qy - p0[1]
+        t = (wx * seg[0] + wy * seg[1]) / seg_len_sq
+        t = np.clip(t, 0.0, 1.0)
+        proj_x = p0[0] + t * seg[0]
+        proj_y = p0[1] + t * seg[1]
+        dx = qx - proj_x
+        dy = qy - proj_y
+        dist_sq = dx * dx + dy * dy
+        cross_z = seg[0] * dy - seg[1] * dx
+        d = np.sign(cross_z) * np.hypot(dx, dy)
+        s_raw = self.s_cum[i] + t * self.seg_len[i]
+        return dist_sq, s_raw, d, t, proj_x, proj_y
+
+    def _unwrap_from_previous(self, s_raw):
+        """
+        Convert wrapped s_raw in [0, track_length) into continuous progress
+        using the previously stored continuous value.
+        """
+        if self.s_continuous is None:
+            return s_raw
+        # previous wrapped position corresponding to stored continuous progress
+        s_prev_raw = self.s_continuous % self.track_length
+        ds = s_raw - s_prev_raw
+        if ds > 0.5 * self.track_length:
+            ds -= self.track_length
+        elif ds < -0.5 * self.track_length:
+            ds += self.track_length
+        return self.s_continuous + ds
+
+    def _build_result(self, s_raw, d, seg_idx, t, proj_x, proj_y):
+        s_cont = self._unwrap_from_previous(s_raw)
+        self.s_continuous = s_cont
+        lap = int(np.floor(s_cont / self.track_length))
+        return ProgressResult(
+            s=s_cont,
+            s_raw=s_raw,
+            d=d,
+            seg_idx=seg_idx,
+            t=t,
+            proj_x=proj_x,
+            proj_y=proj_y,
+            lap=lap,
+        )
+
+    def initialize_global(self, qx, qy):
+        best = None
+        best_i = None
+        for i in range(self.num_seg):
+            result = self._project_to_segment(qx, qy, i)
+            dist_sq = result[0]
+            if best is None or dist_sq < best[0]:
+                best = result
+                best_i = i
+        self.last_seg_idx = best_i
+        self.initialized = True
+        _, s_raw, d, t, proj_x, proj_y = best # type: ignore
+        return self._build_result(s_raw, d, best_i, t, proj_x, proj_y)
+
+    def update(self, qx, qy, window=20):
+        if not self.initialized:
+            return self.initialize_global(qx, qy)
+        idxs = self._candidate_indices(self.last_seg_idx, window)
+        best = None
+        best_i = None
+        for i in idxs:
+            result = self._project_to_segment(qx, qy, i)
+            dist_sq = result[0]
+            if best is None or dist_sq < best[0]:
+                best = result
+                best_i = i
+        self.last_seg_idx = best_i
+        _, s_raw, d, t, proj_x, proj_y = best # type: ignore
+        return self._build_result(s_raw, d, best_i, t, proj_x, proj_y)
+
+    def reset_progress(self):
+        self.s_continuous = None
+        self.initialized = False
+        self.last_seg_idx = 0

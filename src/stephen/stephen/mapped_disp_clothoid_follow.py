@@ -208,8 +208,8 @@ class DisparityFollow(Node):
     def print_info(self):
         if not self.ready_flag:
             return
-        print(f'pipeline load {self.pipeline_time/0.025:.2f}%\n')
-        print(f'virtual time load {self.get_virtual_time/0.025:.2f}%')
+        print(f'pipeline load {100*self.pipeline_time/0.025:.3f}%\n')
+        print(f'virtual time load {100*self.get_virtual_time/0.025:.3f}%')
 
     def publish_drive(self, velocity, acceleration, steering_angle, steering_velocity):
         drive_msg = AckermannDriveStamped()

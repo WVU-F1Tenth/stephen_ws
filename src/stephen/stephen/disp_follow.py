@@ -13,7 +13,7 @@ from geometry_msgs.msg import Point
 from std_msgs.msg import ColorRGBA
 from dataclasses import dataclass
 from .io_utils import Binding, DualBinding, KeyBindings
-from .disp_utils import Scan, get_virtual, get_virtual2
+from .disp_utils import Scan, get_virtual
 
 # Criteria: use steering angle
 # maximize distance seen when stable
@@ -21,12 +21,8 @@ from .disp_utils import Scan, get_virtual, get_virtual2
 
 @dataclass
 class Config:
-    simulation: bool = True
+    simulation: bool = False
     ccw: bool = True
-    # Algorithm parameters
-    disparity_threshold: float = 0.5
-    map_extension: float = 0.25
-    steering_velocity: float = 0.0
     # Speed parameters
     speed_method: str = 'fast' # 'flat' or 'fast'
     max_speed: float = 100.0
@@ -52,7 +48,7 @@ params = KeyBindings(
     velocities_mode=DualBinding('Velocities Mode', 'v', 's', False),
     disparity_threshold=Binding('disparity threshold', 't', 0.5),
     steering_velocity=Binding('steering velocity', 'w', 0.0),
-    map_extension=Binding('map extension', 'e', 0.45),
+    map_extension=Binding('map extension', 'e', 0.35),
 )
 
 @dataclass
@@ -93,6 +89,7 @@ class DisparityFollow(Node):
         self.v2: np.ndarray
         self.start_time = 0.0
         self.scan_flag = False
+        self.ready_flag = False
         
     def adjust(self, scan: LaserScan):
         if not self.scan_flag:
@@ -112,7 +109,7 @@ class DisparityFollow(Node):
 
             get_virtual_start = perf_counter()
             self.virtual = get_virtual(self.ranges, np.float32(self.scan.increment), np.float32(params.map_extension.v))
-            self.get_virtual_time = (perf_counter() - get_virtual_start) * 1_000
+            self.get_virtual_time = (perf_counter() - get_virtual_start)
 
             pos_disps, neg_disps = self.disparities(self.ranges)
 
@@ -126,7 +123,7 @@ class DisparityFollow(Node):
 
             self.speed = self.get_speed(self.path)
             
-            self.pipeline_time = (perf_counter() - pipeline_start) * 1_000
+            self.pipeline_time = (perf_counter() - pipeline_start)
 
         # =====================================================
         except Exception as e:
@@ -137,12 +134,13 @@ class DisparityFollow(Node):
         self.publish_drive(self.speed, 1.0, self.steering_angle, self.steering_velocity)
         self.v1 = self.ranges
         self.v2 = self.virtual
-        self.publish_markers()
+        self.ready_flag = True
 
     def print_info(self):
-        pass
-        print(f'{self.pipeline_time/.025 = :.2f} %')
-        print(f'{self.get_virtual_time/.025 = :.2f} %\n')
+        if not self.ready_flag:
+            return
+        print(f'pipeline load {100*self.pipeline_time/.025:.3f} %')
+        print(f'virtual time load {100*self.get_virtual_time/.025:.3f} %\n')
 
     def publish_drive(self, velocity, acceleration, steering_angle, steering_velocity):
         drive_msg = AckermannDriveStamped()
@@ -153,10 +151,6 @@ class DisparityFollow(Node):
         drive_msg.drive.acceleration = acceleration
         self.drive_pub.publish(drive_msg)
     
-    def apply_range_limit(self, ranges, limit):
-        safe_gap_value = 100.0
-        ranges[ranges > limit] = safe_gap_value
-    
     def disparities(self, ranges):
         diffs = np.diff(ranges)
         threshold = params.disparity_threshold.v
@@ -165,17 +159,15 @@ class DisparityFollow(Node):
         return (pos_disp, neg_disp + 1)
     
     def get_paths(self, pos_disps: np.ndarray, neg_disps: np.ndarray):
-        # Satisfiability: 1. disp radius, 2. arc path, 3. minimum arc radius
         paths = ([Path(disp, self.ranges[int(disp)], 1) for disp in pos_disps] +
                  [Path(disp, self.ranges[int(disp)], -1) for disp in neg_disps])
-        
         self.resolve_virtual(self.virtual, paths)
-        
         valid_paths = [path for path in paths if path.valid]
-
         if not valid_paths:
             raise RuntimeError('No valid paths found.')
-
+        for path in valid_paths:
+            path.angle = np.float32(self.scan.index_to_angle(path.index))
+            path.vangle = np.float32(self.scan.index_to_angle(path.vindex))
         return valid_paths
     
     def resolve_virtual(self, virtual, paths):
@@ -241,10 +233,7 @@ class DisparityFollow(Node):
         else:
             dt = 0.025
         self.start_time = perf_counter()
-
-        # Velocity calulation
         theta_velocity = params.steering_velocity.v * theta**2
-            
         theta = np.clip(theta, -config.max_steer, config.max_steer)
         self.theta = theta
         return theta, theta_velocity
@@ -288,6 +277,8 @@ class DisparityFollow(Node):
         return speed
     
     def publish_markers(self):
+        if not self.ready_flag:
+            return
         if self.path:
             L = self.path.vdepth
             theta = self.steering_angle

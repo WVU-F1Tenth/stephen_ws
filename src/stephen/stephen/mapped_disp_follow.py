@@ -214,8 +214,7 @@ class DisparityFollow(Node):
             return
         if hasattr(self, 'algorithm_rate'):
             print(f'algorithm rate {self.algorithm_rate:.2f}Hz')
-        print(f'pipeline load {self.pipeline_time/0.025:.2f}%\n')
-        print(f'virtual time load {self.get_virtual_time/0.025:.2f}%')
+        print(f'pipeline load {100*self.pipeline_time/0.025:.3f}%\n')
 
     def publish_drive(self, velocity, acceleration, steering_angle, steering_velocity):
         drive_msg = AckermannDriveStamped()

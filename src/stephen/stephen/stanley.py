@@ -94,8 +94,8 @@ class Stanley(Node):
     def print_info(self):
         if not self.ready_flag:
             return
-        print(f'pipeline load = {self.callback_time/0.025:.2f}%')
-        print(f'raceline conversion load = {self.race_conv_time/0.025:.2f}%')
+        print(f'pipeline load = {100*self.callback_time/0.025:.3f}%')
+        print(f'raceline conversion load = {100*self.race_conv_time/0.025:.3f}%')
 
     def odom_callback(self, odometry_info: Odometry):
         self.pose_callback(odometry_info.pose)

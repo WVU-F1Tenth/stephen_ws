@@ -13,7 +13,8 @@ from geometry_msgs.msg import Point, PoseStamped
 from std_msgs.msg import ColorRGBA
 from dataclasses import dataclass
 from .io_utils import Binding, DualBinding, KeyBindings
-from .disp_utils import Scan, get_virtual, nearest_object_intersect
+from .disp_utils import (Scan, get_virtual, nearest_object_intersect,
+                         LocalFrenetProgress, ProgressResult)
 from pathlib import Path as FilePath
 import os
 from .utils import Raceline, quat_to_yaw
@@ -29,7 +30,7 @@ if not CSV_PATH.exists():
 
 @dataclass
 class Config:
-    simulation: bool = False
+    simulation: bool = True
     ccw: bool = True
     # Algorithm parameters
     disparity_threshold: float = 0.5
@@ -172,8 +173,7 @@ class DisparityFollow(Node):
             return
         if hasattr(self, 'algorithm_rate'):
             print(f'algorithm rate {self.algorithm_rate:.2f}Hz')
-        print(f'pipeline load {self.pipeline_time/0.025:.2f}%')
-        print(f'virtual time load {self.get_virtual_time/0.025:.2f}%\n')
+        print(f'pipeline load {100*self.pipeline_time/0.025:.3f}%')
 
     def publish_drive(self, velocity, acceleration, steering_angle, steering_velocity):
         drive_msg = AckermannDriveStamped()
@@ -202,21 +202,15 @@ class DisparityFollow(Node):
         return (pos_disp, neg_disp + 1)
     
     def get_paths(self, pos_disps: np.ndarray, neg_disps: np.ndarray):
-        # Satisfiability: 1. disp radius, 2. arc path, 3. minimum arc radius
         paths = ([Path(disp, self.ranges[int(disp)], 1) for disp in pos_disps] +
                  [Path(disp, self.ranges[int(disp)], -1) for disp in neg_disps])
-        
         self.resolve_virtual(self.virtual, paths)
-        
         valid_paths = [path for path in paths if path.valid]
-
         if not valid_paths:
             raise RuntimeError('No valid paths found.')
-
         for path in valid_paths:
             path.angle = np.float32(self.scan.index_to_angle(path.index))
             path.vangle = np.float32(self.scan.index_to_angle(path.vindex))
-
         return valid_paths
     
     def resolve_virtual(self, virtual, paths):
