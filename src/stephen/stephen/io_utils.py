@@ -116,9 +116,3 @@ class KeyBindings:
     
     def restore_terminal(self):
         termios.tcsetattr(self.fd, termios.TCSADRAIN, self.terminal_settings)
-
-class FileInfo:
-    pass
-
-class PrintInfo:
-    pass
