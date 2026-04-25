@@ -225,19 +225,22 @@ class DisparityFollow(Node):
         pdisps, ndisps = self.disparities(virtual)
         if pdisps.size == 0 and ndisps.size == 0:
             raise RuntimeError('No virtual disparities found.')
-        vdisps = np.concatenate((pdisps, ndisps))
         for path in paths:
-            diff = np.abs(vdisps - path.index)
+            if (path.sign == 1 and pdisps.size > 0) or (path.sign == -1 and ndisps.size == 0):
+                xdisps = pdisps
+                path.vsign = 1
+            else:
+                xdisps = ndisps
+                path.vsign = -1
+            diff = np.abs(xdisps - path.index)
             nearest_idx = np.argmin(diff)
-            vsign = 1 if nearest_idx < pdisps.size else -1
-            nearest = vdisps[nearest_idx]
-            neighborhood = vdisps[np.abs(vdisps - nearest) <= 10]
+            nearest = xdisps[nearest_idx]
+            neighborhood = xdisps[np.abs(xdisps - nearest) <= 10]
             goal = neighborhood[np.argmax(virtual[neighborhood])]
-            path.vsign = vsign
             path.vindex = goal
             path.vdepth = virtual[goal]
             path.vangle = self.scan.index_to_angle(goal)
-            self.vdisps = vdisps
+        self.vdisps = np.concatenate((ndisps, pdisps))
 
     def car_xyyaw(self):
         yaw = quat_to_yaw(self.pose.orientation)
