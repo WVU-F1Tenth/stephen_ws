@@ -51,7 +51,7 @@ class Scan:
 
 @njit(cache=True)
 def get_virtual(ranges: np.ndarray, angle_increment: np.float32, extension: np.float32,
-                min_range: np.float32 = np.float32(0.3)) -> np.ndarray:
+                min_range: np.float32 = np.float32(0.2)) -> np.ndarray:
     ranges = ranges.copy() / min_range
     new_ranges = ranges.copy() / min_range
     extension /= min_range

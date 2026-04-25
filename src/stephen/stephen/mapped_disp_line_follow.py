@@ -393,7 +393,7 @@ class DisparityFollow(Node):
         if config.publish_points1 and hasattr(self, 'paths'):
             points1 = [Point(x=path.depth*math.cos(path.angle),
                             y=path.depth*math.sin(path.angle),
-                            z=0.1) for path in self.paths]
+                            z=0.01) for path in self.paths]
             m = Marker()
             m.header.frame_id = '/ego_racecar/laser'
             m.header.stamp = self.get_clock().now().to_msg()
@@ -409,7 +409,7 @@ class DisparityFollow(Node):
         if config.publish_points2 and hasattr(self, 'paths'):
             points2 = [Point(x=path.vdepth*math.cos(path.vangle),
                             y=path.vdepth*math.sin(path.vangle),
-                            z=0.1) for path in self.paths]
+                            z=0.01) for path in self.paths]
             m = Marker()
             m.header.frame_id = '/ego_racecar/laser'
             m.header.stamp = self.get_clock().now().to_msg()
@@ -425,7 +425,7 @@ class DisparityFollow(Node):
         if config.publish_points3 and self.path is not None:
             points3 = [Point(x=float(self.path.vdepth*np.cos(self.path.vangle)),
                             y=float(self.path.vdepth*np.sin(self.path.vangle)),
-                            z=0.1)]
+                            z=0.02)]
             m = Marker()
             m.header.frame_id = '/ego_racecar/laser'
             m.header.stamp = self.get_clock().now().to_msg()
