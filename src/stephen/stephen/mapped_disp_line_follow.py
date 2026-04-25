@@ -13,8 +13,7 @@ from geometry_msgs.msg import Point, PoseStamped
 from std_msgs.msg import ColorRGBA
 from dataclasses import dataclass
 from .io_utils import Binding, DualBinding, KeyBindings
-from .disp_utils import (Scan, get_virtual, nearest_object_intersect,
-                         LocalFrenetProgress, ProgressResult)
+from .disp_utils import Scan, get_virtual
 from pathlib import Path as FilePath
 import os
 from .utils import Raceline, quat_to_yaw, RacelineSpline, car_to_map
@@ -123,6 +122,8 @@ class DisparityFollow(Node):
         self.publish_raceline(self.raceline.x_ref, self.raceline.y_ref)
         
     def adjust(self, scan: LaserScan):
+        if not hasattr(self, 'pose'):
+            return
         if hasattr(self, 'algorithm_start'):
             self.algorithm_rate = 1.0 / (perf_counter() - self.algorithm_start)
         self.algorithm_start = perf_counter()
@@ -138,6 +139,8 @@ class DisparityFollow(Node):
         # =================== Pipeline ========================
             
             pipeline_start = perf_counter()
+
+            self.x_car, self.y_car, self.yaw_car = self.car_xyyaw()
 
             virtual_time_start = perf_counter()
             self.virtual = get_virtual(self.ranges, np.float32(self.scan.increment), np.float32(params.map_extension.v))
@@ -262,13 +265,13 @@ class DisparityFollow(Node):
                 path.vdepth*np.cos(path.vangle),
                 path.vdepth*np.sin(path.vangle),
                 0.0,
-                self.pose.position.x,
-                self.pose.position.y,
-                quat_to_yaw(self.pose.orientation)
+                self.x_car,
+                self.y_car,
+                self.yaw_car
             )
             progress, cross_track_error = self.spline.relative(
-                self.pose.position.x,
-                self.pose.position.y,
+                self.x_car,
+                self.y_car,
                 vx,
                 vy
             )

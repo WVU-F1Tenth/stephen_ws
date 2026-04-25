@@ -200,8 +200,8 @@ class Raceline:
         self.v_ref = self.v_ref[::-1]
 
     def nearest(self, point):
-        dx = self.x_ref - point
-        dy = self.y_ref - point
+        dx = self.x_ref - point[0]
+        dy = self.y_ref - point[1]
         d = np.hypot(dx, dy)
         return np.argmin(d)
 

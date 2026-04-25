@@ -13,14 +13,13 @@ from geometry_msgs.msg import Point, PoseStamped
 from std_msgs.msg import ColorRGBA
 from dataclasses import dataclass
 from .io_utils import Binding, DualBinding, KeyBindings
-from .disp_utils import (Scan, get_virtual, nearest_object_intersect,
-                         max_point_radius, radial_extension_to_path)
+from .disp_utils import Scan, get_virtual
 from pathlib import Path as FilePath
 import os
-from .utils import (Raceline, car_to_map, map_to_car, quat_to_yaw, threshold_index_cumulative,
-                    idx_nearest_point)
+from .utils import Raceline, quat_to_yaw, RacelineSpline, car_to_map, map_to_car
 import pandas as pd
 from pyclothoids import Clothoid
+
 
 map_path = os.environ.get('MAP_PATH')
 if map_path is None:
@@ -33,10 +32,6 @@ if not CSV_PATH.exists():
 class Config:
     simulation: bool = True
     ccw: bool = True
-    # Algorithm parameters
-    disparity_threshold: float = 0.5
-    map_extension: float = 0.25
-    steering_velocity: float = 0.0
     # Speed parameters
     speed_method: str = 'fast' # 'flat' or 'fast'
     max_speed: float = 100.0
@@ -48,10 +43,13 @@ class Config:
     max_steer: float = 0.38
     # Output parameters
     viz_rate: float = 0.2
+    file_output: bool = True
     publish_points1: bool = True
     publish_points2: bool = True
     publish_points3: bool = True
     publish_points4: bool = True
+    publish_v1: bool = True
+    publish_v2: bool = True
 config = Config()
 
 if config.simulation:
@@ -63,24 +61,25 @@ params = KeyBindings(
     velocities_mode=DualBinding('Velocities Mode', 'v', 's', False),
     disparity_threshold=Binding('disparity threshold', 't', 0.5),
     steering_velocity=Binding('steering velocity', 'w', 0.0),
-    map_extension=Binding('map extension', 'e', 0.45),
-    lookahead=Binding('lookahead', 'l', 1.0),
-    clothoid_lookahead=Binding('clothoid lookahead', 'q', 0.1),
-    intersect_threshold=Binding('intersect threshold', 'x', 1.0)
+    map_extension=Binding('map extension', 'e', 0.35),
+    progress_k=Binding('progress gain', 'p', 1.0),
+    cross_track_k=Binding('cross track error gain', 'c', 1.0),
+    steering_diff_k=Binding('steering difference gain', 'r', 1.0),
+    clothoid_lookahead=Binding('clothoid lookahead', 'q', 0.1)
 )
 
 @dataclass
 class Path:
-    sign: int
     index: int
     depth:np.float32
+    sign: int
     angle: np.float32 = np.float32(0.0)
     vsign: int = 0
     vindex: int = 0
     vdepth: np.float32 = np.float32(0.0)
     vangle: np.float32 = np.float32(0.0)
     valid: bool = True
-    ref_idx: int = -1
+    score: np.float32 = np.float32(0.0)
 
 class DisparityFollow(Node):
     def __init__(self):
@@ -95,8 +94,12 @@ class DisparityFollow(Node):
         self.viz_timer = self.create_timer(config.viz_rate, self.publish_markers)
         self.raceline_viz = self.create_publisher(Marker, '/viz/raceline', 10)
         self.keyboard_timer = self.create_timer(.2, params.check_input)
-        self.print_timer = self.create_timer(5.0, self.print_info)
+        self.print_timer = self.create_timer(1.0, self.print_info)
         self.line_marker_pub = self.create_publisher(Marker, '/viz/goal', 10)
+        if config.publish_v1:
+            self.v1_pub = self.create_publisher(Float32MultiArray, '/v1_ranges', 10)
+        if config.publish_v2:
+            self.v2_pub = self.create_publisher(Float32MultiArray, '/v2_ranges', 10)
         if config.publish_points1:
             self.points1_pub = self.create_publisher(Marker, '/viz/points1', 10)
         if config.publish_points2:
@@ -110,10 +113,13 @@ class DisparityFollow(Node):
         self.raceline = Raceline(df)
         if not config.ccw:
             self.raceline.reverse()
+        self.spline = RacelineSpline(self.raceline.x_ref, self.raceline.y_ref, dtype=np.float32, smooth=20.0)
         
         self.path = None
         self.steering_angle: np.float32 = np.float32(0.0)
         self.speed: float = 0.0
+        self.v1: np.ndarray
+        self.v2: np.ndarray
         self.start_time = 0.0
         self.scan_flag = False
         self.ready_flag = False
@@ -121,13 +127,16 @@ class DisparityFollow(Node):
         self.publish_raceline(self.raceline.x_ref, self.raceline.y_ref)
         
     def adjust(self, scan: LaserScan):
+        if not hasattr(self, 'pose'):
+            return
+        if hasattr(self, 'algorithm_start'):
+            self.algorithm_rate = 1.0 / (perf_counter() - self.algorithm_start)
+        self.algorithm_start = perf_counter()
         if not self.scan_flag:
             self.scan_flag = True
             self.scan = Scan(scan)
-
-        if not hasattr(self, 'pose'):
-            print('Waiting on pose')
-            return
+            self.v1 = np.zeros(self.scan.size)
+            self.v2 = np.zeros(self.scan.size)
         
         self.ranges = np.asarray(scan.ranges, dtype=np.float32)
 
@@ -136,64 +145,27 @@ class DisparityFollow(Node):
             
             pipeline_start = perf_counter()
 
-            # Car pose in map frame
             self.x_car, self.y_car, self.yaw_car = self.car_xyyaw()
 
-            # self.apply_range_limit(ranges, 10.0)
-
-            get_virtual_start = perf_counter()
+            virtual_time_start = perf_counter()
             self.virtual = get_virtual(self.ranges, np.float32(self.scan.increment), np.float32(params.map_extension.v))
-            self.get_virtual_time = (perf_counter() - get_virtual_start) * 1_000
+            self.virtual_time = (perf_counter() - virtual_time_start)
 
             pos_disps, neg_disps = self.disparities(self.ranges)
-            self.xr, self.xtheta = nearest_object_intersect(
-            self.scan.angles,
-            self.virtual,
-            np.vstack((self.raceline.x_ref, self.raceline.y_ref)),
-            (self.x_car, self.y_car, self.yaw_car)
-            )
-            # If intersect is close, choose path
-            if self.xr < params.intersect_threshold.v:
-                # Potential paths
-                self.paths = self.get_paths(pos_disps, neg_disps)
 
-                # Choose path
-                self.path = self.choose(self.paths)
+            self.paths = self.get_paths(pos_disps, neg_disps)
+            
+            choose_time_start = perf_counter()
+            self.path = self.choose(self.paths)
+            self.choose_time = perf_counter() - choose_time_start
 
-                # Steering for path
-                delta = self.path_steering(self.path)
-                self.steering_angle, self.steering_velocity = self.get_smooth(delta, self.speed)
-                self.speed = self.get_path_speed(self.path)
+            steering_angle = self.path_steering(self.path)
 
-            # Else intersect is far, steer using reference
-            else:
-                dx_car = self.raceline.x_ref - self.pose.position.x
-                dy_car = self.raceline.y_ref - self.pose.position.y
-                d_car = np.hypot(dx_car, dy_car)
-                nearest_idx = np.argmin(d_car)
-                dx = np.diff(self.raceline.x_ref_closed)
-                dy = np.diff(self.raceline.y_ref_closed)
-                d = np.hypot(dx, dy)
-                goal_idx, _ = threshold_index_cumulative(d,
-                                                      nearest_idx,
-                                                      params.lookahead.v)
-                x_goal_map = self.raceline.x_ref[goal_idx]
-                y_goal_map = self.raceline.y_ref[goal_idx]
-                yaw_goal_map = self.raceline.yaw_ref[goal_idx]
-                x_goal_car, y_goal_car, yaw_goal_car = map_to_car(
-                    x_goal_map, y_goal_map, yaw_goal_map, self.x_car, self.y_car, self.yaw_car)
-                self.goal_x, self.goal_y = x_goal_car, y_goal_car
-                c = Clothoid.G1Hermite(0.0, 0.0, self.steering_angle, x_goal_car, y_goal_car, yaw_goal_car)
-                self.clothoid = c.SampleXY(20)
-                clookahead = params.clothoid_lookahead.v
-                x = c.X(clookahead)
-                y = c.Y(clookahead)
-                yaw = c.Theta(clookahead)
-                delta = np.arctan2(y, x)
-                self.steering_angle, self.steering_velocity = self.get_smooth(delta, self.speed)
-                self.speed = self.get_ref_speed()
+            self.steering_angle, self.steering_velocity = self.get_smooth(steering_angle, self.speed)
 
-            self.pipeline_time = (perf_counter() - pipeline_start) * 1_000
+            self.speed = self.get_speed(self.path)
+            
+            self.pipeline_time = (perf_counter() - pipeline_start)
 
         # =====================================================
         except RuntimeError as e:
@@ -202,14 +174,19 @@ class DisparityFollow(Node):
             return
 
         self.publish_drive(self.speed, 1.0, self.steering_angle, self.steering_velocity)
+        self.v1 = self.ranges
+        self.v2 = self.virtual
 
         self.ready_flag = True
 
     def print_info(self):
         if not self.ready_flag:
             return
-        print(f'pipeline load {100*self.pipeline_time/0.025:.3f}%\n')
-        print(f'virtual time load {100*self.get_virtual_time/0.025:.3f}%')
+        if hasattr(self, 'algorithm_rate'):
+            print(f'\nalgorithm rate {self.algorithm_rate:.2f}Hz')
+        print(f'pipeline load {100*self.pipeline_time/0.025:.3f}%')
+        print(f'choose time {100*self.choose_time/0.025:.3f}%')
+        print(f'virtual time {100*self.virtual_time/0.025:.3f}%')
 
     def publish_drive(self, velocity, acceleration, steering_angle, steering_velocity):
         drive_msg = AckermannDriveStamped()
@@ -229,12 +206,6 @@ class DisparityFollow(Node):
     def apply_range_limit(self, ranges, limit):
         safe_gap_value = 100.0
         ranges[ranges > limit] = safe_gap_value
-
-    def car_xyyaw(self):
-        yaw = quat_to_yaw(self.pose.orientation)
-        x = self.pose.position.x + config.wheelbase * math.cos(yaw)
-        y = self.pose.position.y + config.wheelbase * math.sin(yaw)
-        return np.float32(x), np.float32(y), np.float32(yaw)
     
     def disparities(self, ranges):
         diffs = np.diff(ranges)
@@ -244,8 +215,8 @@ class DisparityFollow(Node):
         return (pos_disp, neg_disp + 1)
     
     def get_paths(self, pos_disps: np.ndarray, neg_disps: np.ndarray):
-        paths = ([Path(1, disp, self.ranges[int(disp)]) for disp in pos_disps] +
-                 [Path(-1, disp, self.ranges[int(disp)]) for disp in neg_disps])
+        paths = ([Path(disp, self.ranges[int(disp)], 1) for disp in pos_disps] +
+                 [Path(disp, self.ranges[int(disp)], -1) for disp in neg_disps])
         self.resolve_virtual(self.virtual, paths)
         valid_paths = [path for path in paths if path.valid]
         if not valid_paths:
@@ -273,47 +244,70 @@ class DisparityFollow(Node):
             path.vangle = self.scan.index_to_angle(goal)
             self.vdisps = vdisps
 
+    def car_xyyaw(self):
+        yaw = quat_to_yaw(self.pose.orientation)
+        x = self.pose.position.x + config.wheelbase * math.cos(yaw)
+        y = self.pose.position.y + config.wheelbase * math.sin(yaw)
+        return x, y, yaw
+    
     def choose(self, paths):
-        # Pick disp closest to raceline
-        path_angles = np.asarray([path.angle for path in paths])
-        p = paths[np.argmin(np.abs(path_angles - self.xtheta))]
-        # Find path info
-        pvx = p.vdepth*np.cos(p.vangle)
-        pvy = p.vdepth*np.sin(p.vangle)
-        pvx, pvy, _ = car_to_map(pvx, pvy, 0.0, self.x_car, self.y_car, self.yaw_car)
-        self.pvx = pvx
-        self.pvy = pvy
-        # Find ref nearest path
-        dx = self.raceline.x_ref - pvx
-        dy = self.raceline.y_ref - pvy
-        ref_idx = np.argmin(np.hypot(dx, dy))
-        p.ref_idx = ref_idx
-        self.ref_idx = ref_idx
-        return p
+        if not hasattr(self, 'pose'):
+            raise RuntimeError('Pose not set yet')
+        # Only virtual part of path matters, remove redundancy
+        vpaths = []
+        vidxs = []
+        for path in paths:
+            if path.vindex in vidxs:
+                continue
+            vpaths.append(path)
+            vidxs.append(path.vindex)
+        # Calculate score for each remaining path
+        progress_k = params.progress_k.v
+        cross_track_k = params.cross_track_k.v
+        steering_diff_k = params.steering_diff_k.v
+        for path in vpaths:
+            vx, vy, _ = car_to_map(
+                path.vdepth*np.cos(path.vangle),
+                path.vdepth*np.sin(path.vangle),
+                0.0,
+                self.x_car,
+                self.y_car,
+                self.yaw_car
+            )
+            progress, cross_track_error = self.spline.relative(
+                self.x_car,
+                self.y_car,
+                vx,
+                vy
+            )
+            steering_diff = np.abs(self.steering_angle - path.vangle)
+            path.score = (
+                - progress_k * progress
+                + cross_track_k * np.abs(cross_track_error)
+                + steering_diff_k * steering_diff
+            )
+        #     print(path)
+        #     print(f'{progress = }')
+        #     print(f'{cross_track_error = }')
+        #     print(f'{steering_diff = }\n')
+        # assert False
+        best_path = vpaths[np.argmin([path.score for path in vpaths])]
+        return best_path
 
     def path_steering(self, path):
-        # Transform to car frame
-        ref_x, ref_y, ref_yaw = map_to_car(
-            self.raceline.x_ref,
-            self.raceline.y_ref,
-            self.raceline.yaw_ref,
+        vx, vy, _ = car_to_map(
+            path.vdepth*np.cos(path.vangle),
+            path.vdepth*np.sin(path.vangle),
+            0.0,
             self.x_car,
             self.y_car,
             self.yaw_car
         )
-        v_r = path.vdepth
-        v_theta = path.vangle
-        self.pv_theta, self.pv_r = v_theta, v_r
-        # Set goal points in car frame
-        self.goal_x = v_r*np.cos(v_theta)
-        self.goal_y = v_r*np.sin(v_theta)
-        self.goal_yaw = ref_yaw[idx_nearest_point(
-            self.goal_x,
-            self.goal_y,
-            ref_x,
-            ref_y
-        )]
-        c = Clothoid.G1Hermite(0.0, 0.0, self.steering_angle, self.goal_x, self.goal_y, self.goal_yaw)
+        self.ref_idx = self.raceline.nearest((vx, vy))
+        yaw_ref_map = self.raceline.yaw_ref[self.ref_idx]
+        yaw_car_map = self.yaw_car
+        yaw_ref_car = np.arctan2(np.sin(yaw_ref_map - yaw_car_map), np.cos(yaw_ref_map - yaw_car_map)) + np.pi/2
+        c = Clothoid.G1Hermite(0.0, 0.0, self.steering_angle, vx, vy, yaw_ref_car)
         self.clothoid = c.SampleXY(20)
         clookahead = params.clothoid_lookahead.v
         x = c.X(clookahead)
@@ -327,18 +321,13 @@ class DisparityFollow(Node):
         else:
             dt = 0.025
         self.start_time = perf_counter()
-
         # Velocity calulation
         theta_velocity = params.steering_velocity.v * theta**2
-            
         theta = np.clip(theta, -config.max_steer, config.max_steer)
         self.theta = theta
         return theta, theta_velocity
     
-    def get_ref_speed(self):
-        return params.speed.v
-    
-    def get_path_speed(self, path):
+    def get_speed(self, path):
         return self.flat(path.vangle, path.vdepth)
         
     def flat(self, steering_angle, gap_depth):
@@ -395,11 +384,11 @@ class DisparityFollow(Node):
     def publish_markers(self):
         if not self.ready_flag:
             return
-        if hasattr(self, 'path') and hasattr(self, 'goal_yaw'):
+        if hasattr(self, 'path') and hasattr(self.path, 'vdepth'):
             L = self.path.vdepth # type: ignore
             theta = self.steering_angle
             p0 = Point(x=0.0, y=0.0, z=0.0)
-            p1 = Point(x=3*math.cos(self.goal_yaw), y=3*math.sin(self.goal_yaw), z=0.0)
+            p1 = Point(x=L*math.cos(theta), y=L*math.sin(theta), z=0.0)
             m = Marker()
             m.pose.orientation.w = 1.0
             m.header.frame_id = '/ego_racecar/laser'
@@ -412,12 +401,20 @@ class DisparityFollow(Node):
             m.color = ColorRGBA(r=0.0, g=1.0, b=1.0, a=1.0)
             m.points = [p0, p1]
             self.line_marker_pub.publish(m)
-        if config.publish_points1 and hasattr(self, 'ref_idx'):
-            points1 = [Point(x=float(self.raceline.x_ref[self.ref_idx]),
-                            y=float(self.raceline.y_ref[self.ref_idx]),
-                            z=0.1)]
+        if config.publish_v1 and hasattr(self, 'v1'):
+            msg = Float32MultiArray()
+            msg.data = self.v1.tolist()
+            self.v1_pub.publish(msg)
+        if config.publish_v2 and hasattr(self, 'v2'):
+            msg = Float32MultiArray()
+            msg.data = self.v2.tolist()
+            self.v2_pub.publish(msg)
+        if config.publish_points1 and hasattr(self, 'paths'):
+            points1 = [Point(x=path.depth*math.cos(path.angle),
+                            y=path.depth*math.sin(path.angle),
+                            z=0.1) for path in self.paths]
             m = Marker()
-            m.header.frame_id = '/map'
+            m.header.frame_id = '/ego_racecar/laser'
             m.header.stamp = self.get_clock().now().to_msg()
             m.ns = 'points1'
             m.id = 0
@@ -425,13 +422,13 @@ class DisparityFollow(Node):
             m.action = Marker.ADD
             m.scale.x = 0.2
             m.scale.y = 0.2
-            m.color = ColorRGBA(r=0.0, g=1.0, b=1.0, a=1.0)
+            m.color = ColorRGBA(r=1.0, g=0.0, b=0.0, a=1.0)
             m.points = points1
             self.points1_pub.publish(m)
-        if config.publish_points2 and hasattr(self, 'clothoid'):
-            points2 = [Point(x=point[0],
-                            y=point[1],
-                            z=0.2) for point in zip(self.clothoid[0], self.clothoid[1])]
+        if config.publish_points2 and hasattr(self, 'paths'):
+            points2 = [Point(x=path.vdepth*math.cos(path.vangle),
+                            y=path.vdepth*math.sin(path.vangle),
+                            z=0.1) for path in self.paths]
             m = Marker()
             m.header.frame_id = '/ego_racecar/laser'
             m.header.stamp = self.get_clock().now().to_msg()
@@ -439,15 +436,15 @@ class DisparityFollow(Node):
             m.id = 0
             m.type = Marker.POINTS
             m.action = Marker.ADD
-            m.scale.x = 0.1
-            m.scale.y = 0.1
+            m.scale.x = 0.2
+            m.scale.y = 0.2
             m.color = ColorRGBA(r=0.0, g=1.0, b=0.0, a=1.0)
             m.points = points2
             self.points2_pub.publish(m)
-        if config.publish_points3 and hasattr(self, 'goal_x'):
-            points3 = [Point(x=float(self.goal_x),
-                             y=float(self.goal_y),
-                             z=0.1)]
+        if config.publish_points3 and self.path is not None:
+            points3 = [Point(x=float(self.path.vdepth*np.cos(self.path.vangle)),
+                            y=float(self.path.vdepth*np.sin(self.path.vangle)),
+                            z=0.1)]
             m = Marker()
             m.header.frame_id = '/ego_racecar/laser'
             m.header.stamp = self.get_clock().now().to_msg()
@@ -457,13 +454,13 @@ class DisparityFollow(Node):
             m.action = Marker.ADD
             m.scale.x = 0.2
             m.scale.y = 0.2
-            m.color = ColorRGBA(r=1.0, g=0.0, b=0.0, a=1.0)
+            m.color = ColorRGBA(r=0.0, g=0.0, b=1.0, a=1.0)
             m.points = points3
             self.points3_pub.publish(m)
-        if config.publish_points4 and hasattr(self, 'pv_theta'):
-            points4 = [Point(x=float(self.pv_r*np.cos(self.pv_theta)),
-                            y=float(self.pv_r*np.sin(self.pv_theta)),
-                            z=0.2)]
+        if config.publish_points4 and hasattr(self, 'clothoid'):
+            points4 = [Point(x=point[0],
+                            y=point[1],
+                            z=0.2) for point in zip(self.clothoid[0], self.clothoid[1])]
             m = Marker()
             m.header.frame_id = '/ego_racecar/laser'
             m.header.stamp = self.get_clock().now().to_msg()
@@ -471,11 +468,12 @@ class DisparityFollow(Node):
             m.id = 0
             m.type = Marker.POINTS
             m.action = Marker.ADD
-            m.scale.x = 0.2
-            m.scale.y = 0.2
+            m.scale.x = 0.1
+            m.scale.y = 0.1
             m.color = ColorRGBA(r=0.0, g=1.0, b=0.0, a=1.0)
             m.points = points4
             self.points4_pub.publish(m)
+            
 
 def main(args=None):
     rclpy.init(args=args)
