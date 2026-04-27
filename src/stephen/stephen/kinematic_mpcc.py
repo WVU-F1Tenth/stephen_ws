@@ -35,7 +35,7 @@ if not CSV_PATH.exists():
 
 @dataclass
 class mpc_config:
-    NXK: int = 5  # length of kinematic state vector: z = [x, y, v, yaw]
+    NXK: int = 5  # length of kinematic state vector: z = [x, y, v, yaw, theta]
     NU: int = 2  # length of input vector: u = = [acceleration, delta]
     TK: int = 8  # finite time horizon length kinematic
     # ---------------------------------------------------
@@ -61,7 +61,7 @@ class mpc_config:
     WB: float = 0.33  # Wheelbase [m]
     MAX_STEER: float = 0.4  # maximum steering angle [rad]
     MAX_DSTEER: float = np.deg2rad(90)  # maximum steering speed [rad/s]
-    MAX_SPEED: float = 6.0  # maximum speed [m/s]
+    MAX_SPEED: float = 4.0  # maximum speed [m/s]
     MIN_SPEED: float = 0.0  # minimum backward speed [m/s]
     MAX_ACCEL: float = 4.0  # maximum acceleration [m/ss]
 
@@ -88,9 +88,10 @@ class MPC(Node):
         else:
             self.sub_pose = self.create_subscription(Odometry, '/pf/viz/odom', self.pose_callback, 1)
         self.keyboard_timer = self.create_timer(.3, params.check_input)
-        self.print_timer = self.create_timer(1.0, self.print_info)
+        self.print_timer = self.create_timer(2.0, self.print_info)
         self.mpc_solve_time = 0.0
         self.mpc_total_time = 0.0
+        self.algorithm_rate = 0.0
         
         # Reading CSV data
         df = pd.read_csv(CSV_PATH, header=0, comment='#', sep=';')
@@ -102,7 +103,6 @@ class MPC(Node):
         self.curvatures = df.iloc[:-1, 4].to_numpy(dtype=float)
         self.ref_v = df.iloc[:-1, 5].to_numpy(dtype=float)
         self.point_count = self.ref_x.size
-
         # Spline
         self.raceline = RacelineSpline(x_ref_closed, y_ref_closed, dtype=float)
 
@@ -119,17 +119,27 @@ class MPC(Node):
 
         self.publish_raceline(self.ref_x, self.ref_y)
 
+    def print_info(self):
+        if hasattr(self, 'algorithm_rate'):
+            print(f'\nalgorithm rate {self.algorithm_rate:.2f}Hz')
+            print(f'mpc solve load {100*self.mpc_solve_time/0.025:.3f}%')
+            print(f'total pipeline load {100*self.mpc_total_time/0.025:.3f}%\n')
+
     def odom_callback(self, odometry_info: Odometry):
         self.pose_callback(odometry_info)
 
     def pose_callback(self, odometry_info):
+        if hasattr(self, 'algorithm_start'):
+            self.algorithm_rate = 1.0 / (perf_counter() - self.algorithm_start)
+        self.algorithm_start = perf_counter()
         self.mpc_total_time_start = perf_counter()
         pose = odometry_info.pose.pose
         twist = odometry_info.twist.twist
         vehicle_state = State(
             x = pose.position.x,
             y = pose.position.y,
-            v = twist.linear.x,
+            # TODO May want to use old predicted velocity
+            v = self.ovel_input,
             yaw = quat_to_yaw(pose.orientation),
             theta = float(self.raceline.xy_to_s((pose.position.x, pose.position.y))),
             delta = self.odelta_input,
@@ -140,7 +150,7 @@ class MPC(Node):
         x0 = [vehicle_state.x, vehicle_state.y, vehicle_state.v, vehicle_state.yaw, vehicle_state.theta]
 
         (
-            self.oa,
+            self.ovel,
             self.odelta,
             ox,
             oy,
@@ -148,7 +158,7 @@ class MPC(Node):
             ov,
             otheta,
             state_predict,
-        ) = self.linear_mpc_control(x0, self.oa, self.odelta)
+        ) = self.linear_mpc_control(x0, self.ovel, self.odelta)
         
         self.ovel_input = np.clip(vehicle_state.v + self.oa[0] * self.config.DTK, # type: ignore
                             self.config.MIN_SPEED,
@@ -496,10 +506,6 @@ class MPC(Node):
 
         return mpc_a, mpc_delta, mpc_x, mpc_y, mpc_yaw, mpc_v, path_predict
     
-    def print_info(self):
-        print(f'mpc solve time          {self.mpc_solve_time}')
-        print(f'total pipeline time  {self.mpc_total_time}\n')
-
     def publish_raceline(self, x, y):
         raceline = Marker()
         raceline.header.frame_id = "map"

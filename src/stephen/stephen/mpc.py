@@ -21,7 +21,7 @@ from time import perf_counter
 from .utils import quat_to_yaw
 from .io_utils import Binding, DualBinding, KeyBindings
 
-SIMULATOR = False
+SIMULATOR = True
 
 params = KeyBindings()
 
@@ -62,7 +62,7 @@ class mpc_config:
     MIN_STEER: float = -0.4  # minimum steering angle [rad]
     MAX_STEER: float = 0.4  # maximum steering angle [rad]
     MAX_DSTEER: float = np.deg2rad(90)  # maximum steering speed [rad/s]
-    MAX_SPEED: float = 6.0  # maximum speed [m/s]
+    MAX_SPEED: float = 8.0  # maximum speed [m/s]
     MIN_SPEED: float = 0.0  # minimum backward speed [m/s]
     MAX_ACCEL: float = 4.0  # maximum acceleration [m/ss]
 
@@ -88,9 +88,10 @@ class MPC(Node):
         else:
             self.sub_pose = self.create_subscription(Odometry, '/pf/pose/odom', self.pose_callback, 1)
         self.keyboard_timer = self.create_timer(.5, params.check_input)
-        self.print_timer = self.create_timer(1.0, self.print_info)
+        self.print_timer = self.create_timer(2.0, self.print_info)
         self.mpc_solve_time = 0.0
         self.mpc_total_time = 0.0
+        self.algorithm_rate = 0.0
         
         # Reading CSV data
         df = pd.read_csv(CSV_PATH, header=0, comment='#', sep=';')
@@ -110,8 +111,9 @@ class MPC(Node):
         self.config.dlk = self.raceline_spacing
         self.odelta = [0.0] * self.config.TK
         self.oa = [0.0] * self.config.TK
+        self.ov = [0.0] * (self.config.TK + 1)
         self.odelta_input = 0.0
-        self.ovel_input = 0.0
+        self.ov_input = 0.0
         self.init_flag = 0
 
         # initialize MPC problem
@@ -119,10 +121,19 @@ class MPC(Node):
 
         self.publish_raceline(self.ref_x, self.ref_y)
 
+    def print_info(self):
+        if hasattr(self, 'algorithm_rate'):
+            print(f'\nalgorithm rate {self.algorithm_rate:.2f}Hz')
+            print(f'mpc solve load {100*self.mpc_solve_time/0.025:.3f}%')
+            print(f'total pipeline load {100*self.mpc_total_time/0.025:.3f}%\n')
+
     def odom_callback(self, odometry_info: Odometry):
         self.pose_callback(odometry_info)
 
     def pose_callback(self, odometry_info):
+        if hasattr(self, 'algorithm_start'):
+            self.algorithm_rate = 1.0 / (perf_counter() - self.algorithm_start)
+        self.algorithm_start = perf_counter()
         self.mpc_total_time_start = perf_counter()
         pose = odometry_info.pose.pose
         twist = odometry_info.twist.twist
@@ -136,7 +147,7 @@ class MPC(Node):
             beta = 0.0,
         )
 
-        ref_path = self.calc_ref_trajectory(vehicle_state, self.ref_x, self.ref_y, self.ref_yaw, self.ref_v)
+        ref_path = self.calc_ref_trajectory(vehicle_state, self.ref_x, self.ref_y, self.ref_yaw, self.ref_v, self.ov)
         x0 = [vehicle_state.x, vehicle_state.y, vehicle_state.v, vehicle_state.yaw]
 
         # TODO: solve the MPC control problem
@@ -150,16 +161,17 @@ class MPC(Node):
             state_predict,
         ) = self.linear_mpc_control(ref_path, x0, self.oa, self.odelta)
         
-        self.ovel_input = np.clip(vehicle_state.v + self.oa[0] * self.config.DTK, # type: ignore
+        self.ov_input = np.clip(vehicle_state.v + self.oa[0] * self.config.DTK, # type: ignore
                             self.config.MIN_SPEED,
-                            self.config.MAX_SPEED)
+                            params.speed.v)
         self.odelta_input = np.clip(self.odelta[0], # type: ignore
                             self.config.MIN_STEER,
                             self.config.MAX_STEER)
+        self.ov = ov
         ackermann_drive_result = AckermannDriveStamped()
         ackermann_drive_result.header.stamp = self.get_clock().now().to_msg()
         ackermann_drive_result.drive.steering_angle = self.odelta_input
-        vel_input = 0.0 if params.speed.v < 0.05 else self.ovel_input
+        vel_input = 0.0 if params.speed.v < 0.05 else self.ov_input
         ackermann_drive_result.drive.speed = vel_input
         self.pub_drive.publish(ackermann_drive_result)
         self.mpc_total_time = perf_counter() - self.mpc_total_time_start
@@ -297,7 +309,7 @@ class MPC(Node):
         # Optimization goal: minimize the objective function
         self.MPC_prob = cvxpy.Problem(cvxpy.Minimize(objective), constraints)
 
-    def calc_ref_trajectory(self, state, cx, cy, cyaw, sp):
+    def calc_ref_trajectory(self, state, cx, cy, cyaw, sp, ov):
         """
         calc referent trajectory ref_traj in T steps: [x, y, v, yaw]
         using the current velocity, calc the T points along the reference path
@@ -305,34 +317,26 @@ class MPC(Node):
         :param cy: Course y-Position
         :param cyaw: Course Heading
         :param sp: speed profile
-        :dl: distance step
-        :pind: Setpoint Index
-        :return: reference trajectory ref_traj, reference steering angle
+        :return: reference trajectory ref_traj
         """
-
         # Create placeholder Arrays for the reference trajectory for T steps
         ref_traj = np.zeros((self.config.NXK, self.config.TK + 1))
         ncourse = len(cx)
         cyaw = cyaw.copy()
-
         # Find nearest index/setpoint from where the trajectories are calculated
         _, _, _, ind = nearest_point(np.array([state.x, state.y]), np.array([cx, cy]).T)
-
         # Load the initial parameters from the setpoint into the trajectory
         ref_traj[0, 0] = cx[ind]
         ref_traj[1, 0] = cy[ind]
         ref_traj[2, 0] = sp[ind]
         ref_traj[3, 0] = cyaw[ind]
-
-        # based on current velocity, distance traveled on the ref line between time steps
-        # TODO use better velocity approximation
-        travel = abs(state.v) * self.config.DTK * 1.1
-        # Distance in index count
-        dind = travel / self.config.dlk
-        # ind_list = [ind, ind+1*dind, ind+2*dind, ...]
-        ind_list = int(ind) + np.insert(
-            np.cumsum(np.repeat(dind, self.config.TK)), 0, 0
-        ).astype(int)
+        ind_list = [ind]
+        travel = 0
+        for step in range(0, self.config.TK):
+            travel += abs(ov[step]) * self.config.DTK
+            dind = int(travel / self.config.dlk)
+            ind_list.append(ind + dind)
+        ind_list = np.asarray(ind_list)
         # Where greater than or equal to ncourse, then -= ncourse
         ind_list[ind_list >= ncourse] -= ncourse
         ref_traj[0, :] = cx[ind_list]
@@ -342,14 +346,12 @@ class MPC(Node):
         cyaw[cyaw - state.yaw > np.pi] -= 2 * np.pi
         cyaw[cyaw - state.yaw < -np.pi] += 2 * np.pi
         ref_traj[3, :] = cyaw[ind_list]
-
         return ref_traj
 
     def predict_motion(self, x0, oa, od, xref):
         path_predict = xref * 0.0
         for i, _ in enumerate(x0):
             path_predict[i, 0] = x0[i]
-
         state = State(x=x0[0], y=x0[1], yaw=x0[3], v=x0[2])
         for (ai, di, i) in zip(oa, od, range(1, self.config.TK + 1)):
             state = self.update_state(state, ai, di)
@@ -357,29 +359,24 @@ class MPC(Node):
             path_predict[1, i] = state.y
             path_predict[2, i] = state.v
             path_predict[3, i] = state.yaw
-
         return path_predict
 
     def update_state(self, state, a, delta):
-
         # input check
         if delta >= self.config.MAX_STEER:
             delta = self.config.MAX_STEER
         elif delta <= -self.config.MAX_STEER:
             delta = -self.config.MAX_STEER
-
         state.x = state.x + state.v * math.cos(state.yaw) * self.config.DTK
         state.y = state.y + state.v * math.sin(state.yaw) * self.config.DTK
         state.yaw = (
             state.yaw + (state.v / self.config.WB) * math.tan(delta) * self.config.DTK
         )
         state.v = state.v + a * self.config.DTK
-
         if state.v > self.config.MAX_SPEED:
             state.v = self.config.MAX_SPEED
         elif state.v < self.config.MIN_SPEED:
             state.v = self.config.MIN_SPEED
-
         return state
 
     def get_model_matrix(self, v, phi, delta):
@@ -448,6 +445,8 @@ class MPC(Node):
         self.mpc_solve_time_start = perf_counter()
         self.MPC_prob.solve(solver=cvxpy.OSQP, verbose=False, warm_start=True)
         self.mpc_solve_time = perf_counter() - self.mpc_solve_time_start
+        if self.mpc_solve_time > 0.025:
+            print(f'\nMPC SOLVE TIME OF {self.mpc_solve_time}')
 
         if (
             self.MPC_prob.status == cvxpy.OPTIMAL
@@ -481,17 +480,12 @@ class MPC(Node):
 
         # Call the Motion Prediction function: Predict the vehicle motion for x-steps
         path_predict = self.predict_motion(x0, oa, od, ref_path)
-        poa, pod = oa[:], od[:]
 
         # Run the MPC optimization: Create and solve the optimization problem
         mpc_a, mpc_delta, mpc_x, mpc_y, mpc_yaw, mpc_v = self.mpc_prob_solve(
             ref_path, path_predict, x0, oa, od)
 
         return mpc_a, mpc_delta, mpc_x, mpc_y, mpc_yaw, mpc_v, path_predict
-    
-    def print_info(self):
-        print(f'mpc solve load {100*self.mpc_solve_time/0.025:.3f}%')
-        print(f'total pipeline load {100*self.mpc_total_time/0.025:.3f}%\n')
 
     def publish_raceline(self, x, y):
         raceline = Marker()
