@@ -13,7 +13,7 @@ import math
 import os
 from .io_utils import Binding, DualBinding, KeyBindings
 from dataclasses import dataclass
-from .utils import quat_to_yaw, RacelineSpline, Raceline
+from .utils import quat_to_yaw, RacelineSpline, Raceline, car_xyyaw
 from scipy.interpolate import splprep, splev
 from time import perf_counter
 
@@ -30,7 +30,8 @@ if not CSV_PATH.exists():
 
 @dataclass
 class Config:
-    simulation: bool = False
+    simulation: bool = True
+    info: bool = False
     ccw: bool = True
     wheelbase: float = 0.33
     max_steer: float = 0.33
@@ -70,6 +71,7 @@ class Stanley(Node):
 
         self.angle = 0.0
         self.speed = 0.0
+        self.goal = (0.0, 0.0)
         
         df = pd.read_csv(CSV_PATH, header=0, comment='#', sep=';')
         raceline = Raceline(df)
@@ -92,7 +94,7 @@ class Stanley(Node):
         self.publish_raceline(self.x_ref, self.y_ref)
 
     def print_info(self):
-        if not self.ready_flag:
+        if not self.ready_flag or not config.info:
             return
         print(f'pipeline load = {100*self.callback_time/0.025:.3f}%')
         print(f'raceline conversion load = {100*self.race_conv_time/0.025:.3f}%')
@@ -103,18 +105,13 @@ class Stanley(Node):
     def pose_callback(self, pose_stamped):
         callback_time_start = perf_counter()
         pose = pose_stamped.pose
-        x_car_map = pose.position.x
-        y_car_map = pose.position.y
-        heading_car_map = quat_to_yaw(pose.orientation)
+        x_car_map, y_car_map, heading_car_map = car_xyyaw(pose)
+        self.point1 = (x_car_map, y_car_map)
 
         lookahead = (params.lookahead.v * self.speed
                      if params.proportional_lookahead.v
                      else params.lookahead.v)
 
-        # Project to front axle
-        x_car_map = x_car_map + config.wheelbase * math.cos(heading_car_map)
-        y_car_map = y_car_map + config.wheelbase * math.sin(heading_car_map)
-        
         # Find goal point (arc length lookahead)
         if config.use_spline:
             # Find nearest point
@@ -148,16 +145,9 @@ class Stanley(Node):
 
         # yaw_damping = 
 
-        if config.ccw:
-            heading_error = math.atan2(
-                math.cos(-(heading_goal_map - heading_car_map)),
-                math.sin(-(heading_goal_map - heading_car_map))
-            )
-        else:
-            heading_error = math.atan2(
-                -math.cos(-(heading_goal_map - heading_car_map)),
-                -math.sin(-(heading_goal_map - heading_car_map))
-            )
+        heading_offset =  np.pi/2
+        heading_diff = heading_goal_map - heading_car_map + heading_offset
+        heading_error = math.atan2(math.sin(heading_diff), math.cos(heading_diff))
         heading_term = params.k_heading.v * heading_error
 
         crosstrack_error = ((x_car_map - x_goal_map) * math.sin(heading_car_map) - 
@@ -213,8 +203,8 @@ class Stanley(Node):
             return
         point = Point()
         goal_marker = Marker()
-        point.x = float(self.goal[0])
-        point.y = float(self.goal[1])
+        point.x = float(self.point1[0])
+        point.y = float(self.point1[1])
         goal_marker.points = []
         goal_marker.points.append(point)
         goal_marker.header.frame_id = "map"

@@ -212,7 +212,7 @@ def map_to_car(x, y, yaw, x_c, y_c, yaw_c):
     s = np.sin(yaw_c)
     x_car = c * dx + s * dy
     y_car = -s * dx + c * dy
-    yaw_car = np.arctan2(np.sin(yaw - yaw_c), np.cos(yaw - yaw_c)) + np.pi/2
+    yaw_car = np.arctan2(np.sin(yaw - yaw_c), np.cos(yaw - yaw_c))
     return x_car, y_car, yaw_car
 
 def car_to_map(x, y, yaw, x_c, y_c, yaw_c):
@@ -228,3 +228,12 @@ def idx_nearest_point(x, y, path_x, path_y):
     dy = y - path_y
     d = np.hypot(dx, dy)
     return np.argmin(d)
+
+def car_xyyaw(pose,  wheelbase=0.33):
+    """
+    Front axis projection and axes correction
+    """
+    yaw = quat_to_yaw(pose.orientation)
+    x = pose.position.x + wheelbase * math.cos(yaw)
+    y = pose.position.y + wheelbase * math.sin(yaw)
+    return x, y, yaw
