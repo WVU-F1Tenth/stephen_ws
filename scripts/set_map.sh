@@ -77,7 +77,7 @@ if [[ -d "$PF_MAPS" && -f "$MAP_PATH.pgm" ]]; then
 fi
 
 # Add to raceline maps
-RL_MAPS="$HOME/Raceline-Optimization/maps"
+RL_MAPS="$HOME/raceline-optimization/maps"
 if [[ -d "$RL_MAPS" ]]; then
     cp "$MAP_PATH.png" "$RL_MAPS/" 2>/dev/null ||
         cp "$MAP_PATH.pgm" "$RL_MAPS/" ||

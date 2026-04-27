@@ -18,7 +18,7 @@ if [[ -z "$HOME/stephen_ws/src/stephen/data/maps/$1/$1" ]]; then
 fi
 
 RACELINE_DEST="$HOME/stephen_ws/src/stephen/data/maps/$1/${1}_raceline.csv"
-RACELINE_SRC="$HOME/Raceline-Optimization/outputs/$1/${1}_raceline.csv"
+RACELINE_SRC="$HOME/raceline-optimization/outputs/$1/${1}_raceline.csv"
 
 if [[ ! -f "$RACELINE_SRC" ]]; then
     echo "$1 raceline not found"
