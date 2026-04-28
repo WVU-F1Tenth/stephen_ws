@@ -14,7 +14,7 @@ import os
 from .io_utils import Binding, DualBinding, KeyBindings
 from dataclasses import dataclass
 from .utils import quat_to_yaw, RacelineSpline, Raceline, car_xyyaw
-from scipy.interpolate import splprep, splev
+from scipy.interpolate import splprep
 from time import perf_counter
 
 # Notes:
@@ -79,7 +79,7 @@ class Stanley(Node):
         
         df = pd.read_csv(CSV_PATH, header=0, comment='#', sep=';')
         raceline = Raceline(df)
-        if not config.reverse:
+        if config.reverse:
             raceline.reverse()
             
         self.x_ref = raceline.x_ref
@@ -204,8 +204,8 @@ class Stanley(Node):
             return
         point = Point()
         goal_marker = Marker()
-        point.x = float(self.goal[0])
-        point.y = float(self.goal[1])
+        point.x = float(self.goal[0]) # type: ignore
+        point.y = float(self.goal[1]) # type: ignore
         goal_marker.points = []
         goal_marker.points.append(point)
         goal_marker.header.frame_id = "map"
