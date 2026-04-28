@@ -205,6 +205,17 @@ class Raceline:
         d = np.hypot(dx, dy)
         return np.argmin(d)
 
+# def map_to_car(x, y, yaw, x_c, y_c, yaw_c):
+#     dx = x - x_c
+#     dy = y - y_c
+#     c = np.cos(yaw_c)
+#     s = np.sin(yaw_c)
+#     x_car = c * dx + s * dy
+#     y_car = -s * dx + c * dy
+#     offset = -np.pi/2
+#     yaw_car = np.arctan2(np.sin(yaw - yaw_c + offset), np.cos(yaw - yaw_c + offset))
+#     return x_car, y_car, yaw_car
+
 def map_to_car(x, y, yaw, x_c, y_c, yaw_c):
     dx = x - x_c
     dy = y - y_c
@@ -212,7 +223,12 @@ def map_to_car(x, y, yaw, x_c, y_c, yaw_c):
     s = np.sin(yaw_c)
     x_car = c * dx + s * dy
     y_car = -s * dx + c * dy
-    yaw_car = np.arctan2(np.sin(yaw - yaw_c), np.cos(yaw - yaw_c))
+    # Transform the heading vector itself
+    hx = np.cos(yaw)
+    hy = np.sin(yaw)
+    hx_car = c * hx + s * hy
+    hy_car = -s * hx + c * hy
+    yaw_car = np.arctan2(hy_car, hx_car)
     return x_car, y_car, yaw_car
 
 def car_to_map(x, y, yaw, x_c, y_c, yaw_c):
@@ -229,7 +245,7 @@ def idx_nearest_point(x, y, path_x, path_y):
     d = np.hypot(dx, dy)
     return np.argmin(d)
 
-def car_xyyaw(pose,  wheelbase=0.33):
+def car_xyyaw(pose,  wheelbase):
     """
     Front axis projection and axes correction
     """
@@ -237,3 +253,6 @@ def car_xyyaw(pose,  wheelbase=0.33):
     x = pose.position.x + wheelbase * math.cos(yaw)
     y = pose.position.y + wheelbase * math.sin(yaw)
     return x, y, yaw
+
+def wrap(angle):
+    return np.arctan2(np.sin(angle), np.cos(angle))

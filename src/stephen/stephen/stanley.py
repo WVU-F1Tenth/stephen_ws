@@ -21,22 +21,26 @@ from time import perf_counter
 #   spline cw doesn't work
 #   Angles are off, check car axes
 
-map_path = os.environ.get('MAP_PATH')
-if map_path is None:
+MAP_PATH = os.environ.get('MAP_PATH')
+if MAP_PATH is None:
         raise RuntimeError('MAP_PATH not set')
-CSV_PATH = Path(map_path+'_raceline.csv')
+CSV_PATH = Path(MAP_PATH+'_raceline.csv')
 if not CSV_PATH.exists():
     raise RuntimeError("Waypoint file doesn't exist")
+SIMULATION = os.environ.get('SIMULATION')
+if SIMULATION is None:
+    SIMULATION = False
+else:
+    SIMULATION = True
 
 @dataclass
 class Config:
-    simulation: bool = True
+    reverse: bool = False
     info: bool = False
-    ccw: bool = True
     wheelbase: float = 0.33
     max_steer: float = 0.33
     viz_rate: float = 5.0
-    use_spline: bool = True
+    use_spline: bool = False
 config = Config()
 
 # Numeric parameters adjustable by keyboard
@@ -58,7 +62,7 @@ class Stanley(Node):
         self.pub_drive = self.create_publisher(AckermannDriveStamped, '/drive', 10)
         self.raceline_viz = self.create_publisher(Marker, '/viz/raceline', 10)
         self.goal_viz = self.create_publisher(Marker, '/viz/goal', 10)
-        if config.simulation:
+        if SIMULATION:
             self.sub_odom = self.create_subscription(Odometry, '/ego_racecar/odom', self.odom_callback,  1)
         else:
             self.sub_pose = self.create_subscription(PoseStamped, '/pf/viz/inferred_pose', self.pose_callback, 1)
@@ -75,7 +79,7 @@ class Stanley(Node):
         
         df = pd.read_csv(CSV_PATH, header=0, comment='#', sep=';')
         raceline = Raceline(df)
-        if not config.ccw:
+        if not config.reverse:
             raceline.reverse()
             
         self.x_ref = raceline.x_ref
@@ -105,13 +109,10 @@ class Stanley(Node):
     def pose_callback(self, pose_stamped):
         callback_time_start = perf_counter()
         pose = pose_stamped.pose
-        x_car_map, y_car_map, heading_car_map = car_xyyaw(pose)
-        self.point1 = (x_car_map, y_car_map)
-
+        x_car_map, y_car_map, heading_car_map = car_xyyaw(pose, config.wheelbase)
         lookahead = (params.lookahead.v * self.speed
                      if params.proportional_lookahead.v
                      else params.lookahead.v)
-
         # Find goal point (arc length lookahead)
         if config.use_spline:
             # Find nearest point
@@ -136,7 +137,7 @@ class Stanley(Node):
             x_goal_map, y_goal_map = self.x_ref[goal_index], self.y_ref[goal_index]
             heading_goal_map = self.yaw_ref[goal_index]
             self.v_ref = self.velocities[goal_index]
-            self.goal = self.x_ref[goal_index], self.y_ref[goal_index]
+            self.goal = (self.x_ref[goal_index], self.y_ref[goal_index])
             self.race_conv_time = perf_counter() - race_conv_start
 
         # ===================================================================================
@@ -203,8 +204,8 @@ class Stanley(Node):
             return
         point = Point()
         goal_marker = Marker()
-        point.x = float(self.point1[0])
-        point.y = float(self.point1[1])
+        point.x = float(self.goal[0])
+        point.y = float(self.goal[1])
         goal_marker.points = []
         goal_marker.points.append(point)
         goal_marker.header.frame_id = "map"

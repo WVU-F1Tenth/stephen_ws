@@ -15,18 +15,22 @@ from dataclasses import dataclass
 from .io_utils import Binding, DualBinding, KeyBindings
 from .utils import quat_to_yaw, Raceline
 
-map_path = os.environ.get('MAP_PATH')
-if map_path is None:
+MAP_PATH = os.environ.get('MAP_PATH')
+if MAP_PATH is None:
         raise RuntimeError('MAP_PATH not set')
-CSV_PATH = Path(map_path+'_raceline.csv')
+CSV_PATH = Path(MAP_PATH+'_raceline.csv')
 if not CSV_PATH.exists():
     raise RuntimeError("Waypoint file doesn't exist")
+SIMULATION = os.environ.get('SIMULATION')
+if SIMULATION is None:
+    SIMULATION = False
+else:
+    SIMULATION = True
 
 @dataclass
 class Config:
-    simulation: bool = False
     ccw: bool = True
-    wheelbase: float = 0.33
+    wheelbase: float = 0.28
     max_steer: float = 0.33
     viz_rate: float = 5.0
 config = Config()
@@ -45,10 +49,12 @@ class PurePursuit(Node):
         super().__init__('pure_pursuit_node')
         
         # Publishers and Subscribers
-        self.pub_drive = self.create_publisher(AckermannDriveStamped, '/drive', 10)
-        self.raceline_viz = self.create_publisher(Marker, '/viz/raceline', 10)
-        self.goal_viz = self.create_publisher(Marker, '/viz/goal', 10)
-        if config.simulation:
+        self.pub_drive = self.create_publisher(AckermannDriveStamped, '/drive', 1)
+        self.raceline_viz = self.create_publisher(Marker, '/viz/raceline', 1)
+        self.goal_viz = self.create_publisher(Marker, '/viz/goal', 1)
+        self.points1_viz = self.create_publisher(Marker, '/viz/points1', 1)
+        self.line_viz = self.create_publisher(Marker, '/viz/line', 1)
+        if SIMULATION:
             self.sub_odom = self.create_subscription(Odometry, '/ego_racecar/odom', self.odom_callback,  1)
         else:
             self.sub_pose = self.create_subscription(PoseStamped, '/pf/viz/inferred_pose', self.pose_callback, 1)
@@ -84,7 +90,7 @@ class PurePursuit(Node):
         pose = pose_stamped.pose
         x_car_map = pose.position.x
         y_car_map = pose.position.y
-        heading_car_map = quat_to_yaw(pose.orientation)
+        yaw_car_map = quat_to_yaw(pose.orientation)
 
         # ===================================================================================
 
@@ -126,13 +132,17 @@ class PurePursuit(Node):
             self.goal_index = np.searchsorted(relative_dists, lookahead) % self.track.point_count
 
         # Transform goal point to vehicle frame of reference
-        x_goal_car, y_goal_car, _ = map_to_car(
+        x_goal_car, y_goal_car, yaw_goal_car = map_to_car(
             self.track.x_ref[self.goal_index],
             self.track.y_ref[self.goal_index],
-            0.0,
+            self.track.yaw_ref[self.goal_index],
             pose.position.x,
             pose.position.y,
-            0.0)
+            yaw_car_map)
+        
+        self.yaw_goal_map = self.track.yaw_ref[self.goal_index]
+        self.yaw_goal_car = yaw_goal_car
+        self.goal_car = (x_goal_car, y_goal_car)
 
         # Calculate curvature/steering angle
         L = np.hypot(x_goal_car, y_goal_car)
@@ -178,7 +188,7 @@ class PurePursuit(Node):
         raceline.color.r = 0.0
         raceline.color.g = 0.0
         raceline.color.b = 1.0
-        raceline.points = [Point(x=float(x), y=float(y), z=0.0) for x, y in zip(x, y)]
+        raceline.points = [Point(x=float(x), y=float(y), z=0.1) for x, y in zip(x, y)]
         self.raceline_viz.publish(raceline)
 
     def publish_markers(self):
@@ -186,11 +196,16 @@ class PurePursuit(Node):
             return
         point = Point()
         goal_marker = Marker()
-        point.x = float(self.track.x_ref[self.goal_index])
-        point.y = float(self.track.y_ref[self.goal_index])
+        # point.x = float(self.track.x_ref[self.goal_index])
+        # point.y = float(self.track.y_ref[self.goal_index])
+        # point.x = float(self.goal_car[0])
+        # point.y = float(self.goal_car[1])
+        point.x = float(np.cos(self.yaw_goal_car))
+        point.y = float(np.sin(self.yaw_goal_car))
+        point.z = 0.1
         goal_marker.points = []
         goal_marker.points.append(point)
-        goal_marker.header.frame_id = "map"
+        goal_marker.header.frame_id = "ego_racecar/base_link"
         goal_marker.id = 1
         goal_marker.type = Marker.POINTS
         goal_marker.action = Marker.ADD
@@ -200,6 +215,43 @@ class PurePursuit(Node):
         goal_marker.color.a = 1.0
         goal_marker.color.r = 1.0
         self.goal_viz.publish(goal_marker)
+
+        # point1 = Point()
+        # points1 = Marker()
+        # point1.x = 1.0
+        # point1.y = 1.0
+        # point1.z = 0.1
+        # points1.points = []
+        # points1.points.append(point1)
+        # points1.header.frame_id = "ego_racecar/base_link"
+        # points1.id = 1
+        # points1.type = Marker.POINTS
+        # points1.action = Marker.ADD
+        # points1.pose.orientation.w = 1.0
+        # points1.scale.x = 0.2
+        # points1.scale.y = 0.2
+        # points1.color.a = 1.0
+        # points1.color.g = 1.0
+        # self.points1_viz.publish(points1)
+
+        L = 2.0
+        theta = self.yaw_goal_map
+        p0 = Point(x=0.0, y=0.0, z=0.2)
+        p1 = Point(x=L*np.cos(theta), y=L*np.sin(theta), z=0.2)
+        m = Marker()
+        m.pose.orientation.w = 1.0
+        m.header.frame_id = '/map'
+        m.header.stamp = self.get_clock().now().to_msg()
+        m.ns = 'steering_line'
+        m.id = 0
+        m.type = Marker.LINE_STRIP
+        m.action = Marker.ADD
+        m.scale.x = 0.05
+        m.color.g = 1.0
+        m.color.b = 1.0
+        m.color.a = 1.0
+        m.points = [p0, p1]
+        self.line_viz.publish(m)
 
 def main(args=None):
     rclpy.init(args=args)
