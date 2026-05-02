@@ -263,6 +263,7 @@ class DisparityFollow(Node):
         progress_k = params.progress_k.v
         cross_track_k = params.cross_track_k.v
         steering_diff_k = params.steering_diff_k.v
+        _, origin_s = self.spline.progress_at(self.x_car, self.y_car)
         for path in vpaths:
             vx, vy, _ = car_to_map(
                 path.vdepth*np.cos(path.vangle),
@@ -272,9 +273,8 @@ class DisparityFollow(Node):
                 self.y_car,
                 self.yaw_car
             )
-            progress, cross_track_error = self.spline.relative(
-                self.x_car,
-                self.y_car,
+            progress, cross_track_error = self.spline.relative_from(
+                origin_s,
                 vx,
                 vy
             )

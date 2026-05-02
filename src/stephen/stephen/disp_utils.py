@@ -64,24 +64,6 @@ def get_virtual(ranges: np.ndarray, angle_increment: np.float32, extension: np.f
         new_ranges[max(0, i-j): min(n, i+j+1)] = np.minimum(new_ranges[max(0, i-j): min(n, i+j+1)], ranges[i])
     return new_ranges * min_range
 
-# @njit(cache=True)
-# def get_virtual(ranges: np.ndarray, angle_increment: np.float32, extension: np.float32,
-#                 min_range: np.float32 = np.float32(1e-3)) -> np.ndarray:
-#     ranges = np.asarray(ranges, dtype=np.float32)
-#     new_ranges = ranges.copy()
-#     n = ranges.shape[0]
-#     valid = np.isfinite(ranges) & (ranges > np.float32(0.0))
-#     valid_indices = np.flatnonzero(valid)
-#     safe_ranges = np.maximum(ranges[valid], min_range).astype(np.float32)
-#     half_extension = np.float32(0.5) * extension
-#     half_angles = 2*np.arctan(half_extension / safe_ranges).astype(np.float32)
-#     index_extensions = np.ceil(half_angles / angle_increment).astype(np.int32)
-#     for idx, j in zip(valid_indices, index_extensions):
-#         lo = max(0, idx - j)
-#         hi = min(n, idx + j + 1)
-#         new_ranges[lo:hi] = np.minimum(new_ranges[lo:hi], ranges[idx]).astype(np.float32)
-#     return new_ranges.astype(np.float32)
-
 @njit(cache=True)
 def nearest_object_intersect(scan_angles, scan_ranges, ref, car_xyyaw):
     """

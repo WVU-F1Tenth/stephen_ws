@@ -18,8 +18,8 @@ from time import perf_counter
 
 # Numeric parameters adjustable by keyboard
 params = KeyBindings(
-    steering_angle=Binding('steering angle', 'a', 0.0),
-    acceleration=Binding('acceleration', 'q', 0.0),
+    steering_angle=Binding('steering angle', 'd', 0.0),
+    acceleration=Binding('acceleration', 'a', 0.0),
 )
 
 class Testing(Node):

@@ -60,7 +60,7 @@ def normalize_angle(angle):
         return math.atan2(math.sin(angle), math.cos(angle))
 
 class RacelineSpline:
-    def __init__(self, xref, yref, dtype, smooth=20.0, n_dense=1000):
+    def __init__(self, xref, yref, dtype, smooth=20.0, n_dense=500):
         self.dtype = dtype
         self.tck, self.u = splprep([xref, yref], per=1, s=smooth)
         self.u0, self.u1 = self.u[0], self.u[-1]
