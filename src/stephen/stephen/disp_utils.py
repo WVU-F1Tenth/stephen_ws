@@ -108,36 +108,42 @@ def nearest_object_intersect(scan_angles, scan_ranges, ref, car_xyyaw):
     raise RuntimeError('No object intersection found')
 
 @njit(cache=True)
-def max_point_radius(dir, ranges, angle_increment, point_idx):
-    if dir > 0:
-        side_a = ranges[point_idx]
-        side_a_2 = side_a**2
+def max_point_radius(direction, ranges, angle_increment, point_idx):
+    n = ranges.size
+    if direction == 0:
+        return np.float32(0.0), np.float32(0.0)
+    if point_idx < 0 or point_idx >= n:
+        return np.float32(0.0), np.float32(0.0)
+    side_a = ranges[point_idx]
+    side_a_2 = side_a * side_a
+    if direction > 0:
+        if point_idx >= n - 1:
+            return np.float32(0.0), np.float32(0.0)
         idx = point_idx + 1
-        radius = ranges[idx]
         theta = angle_increment
-        while radius > (2 * side_a * np.sin(theta/2)) and idx < ranges.size - 1:
+        side_b = ranges[idx]
+        radius = np.sqrt(side_a_2 + side_b * side_b - 2.0 * side_a * side_b * np.cos(theta))
+        while idx < n - 1 and radius > 2.0 * side_a * np.sin(theta * 0.5) and side_b > side_a:
             idx += 1
             theta += angle_increment
             side_b = ranges[idx]
-            r = np.sqrt(side_a_2 + side_b**2 - 2*side_a*side_b*np.cos(theta))
+            r = np.sqrt(side_a_2 + side_b * side_b - 2.0 * side_a * side_b * np.cos(theta))
             if r < radius:
                 radius = r
-    elif dir < 0:
-        side_a = ranges[point_idx]
-        side_a_2 = side_a**2
+    else:
+        if point_idx <= 0:
+            return np.float32(0.0), np.float32(0.0)
         idx = point_idx - 1
-        radius = ranges[idx]
         theta = angle_increment
-        while radius > (2 * side_a * np.sin(theta/2)) and idx > 0:
+        side_b = ranges[idx]
+        radius = np.sqrt(side_a_2 + side_b * side_b - 2.0 * side_a * side_b * np.cos(theta))
+        while idx > 0 and radius > 2.0 * side_a * np.sin(theta * 0.5) and side_b > side_a:
             idx -= 1
             theta += angle_increment
             side_b = ranges[idx]
-            r = np.sqrt(side_a_2 + side_b**2 - 2*side_a*side_b*np.cos(theta))
+            r = np.sqrt(side_a_2 + side_b * side_b - 2.0 * side_a * side_b * np.cos(theta))
             if r < radius:
                 radius = r
-    # print(dir)
-    # print(radius)
-    # print()
     return radius, theta
     
 @njit(cache=True)

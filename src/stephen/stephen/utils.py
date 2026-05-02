@@ -148,26 +148,24 @@ class RacelineSpline:
     
     def nearest_xy(self, point):
         return self.s_to_xy(self.xy_to_s(point))
-    
-    def relative(self, origin_x, origin_y, x, y):
+
+    def progress_at(self, x, y):
+        u = self.xy_to_u((x, y))
+        return u, self.u_to_s(u)
+
+    def relative_from(self, origin_s, x, y):
         """
-        Return relative progress and signed cross-track error.
-        Positive s_rel means target is ahead along the shortest track direction.
-        Positive d means target is left of the spline tangent.
+        Return relative progress and signed cross-track error from a cached origin.
         """
         point = np.asarray((x, y), dtype=self.dtype)
-        origin_u = self.xy_to_u((origin_x, origin_y))
         target_u = self.xy_to_u(point)
-        origin_s = self.u_to_s(origin_u)
         target_s = self.u_to_s(target_u)
         s_rel = target_s - origin_s
         if s_rel < -0.5 * self.length:
             s_rel += self.length
         elif s_rel > 0.5 * self.length:
             s_rel -= self.length
-        # closest point on spline
         cx, cy = splev(target_u, self.tck)
-        # tangent
         dx_du, dy_du = splev(target_u, self.tck, der=1)
         norm = np.hypot(dx_du, dy_du)
         if norm == 0:
@@ -175,9 +173,17 @@ class RacelineSpline:
         else:
             tx = dx_du / norm
             ty = dy_du / norm
-            # signed cross-track error: positive = left of tangent
             d = tx * (y - cy) - ty * (x - cx)
         return s_rel, d
+    
+    def relative(self, origin_x, origin_y, x, y):
+        """
+        Return relative progress and signed cross-track error.
+        Positive s_rel means target is ahead along the shortest track direction.
+        Positive d means target is left of the spline tangent.
+        """
+        _, origin_s = self.progress_at(origin_x, origin_y)
+        return self.relative_from(origin_s, x, y)
 
 class Raceline:
     def __init__(self, df, dtype=np.float32):

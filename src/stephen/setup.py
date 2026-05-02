@@ -24,7 +24,7 @@ setup(
             'wall_follow=stephen.wall_follow:main',
             'scan_visual=stephen.scan_visual:main',
             'disp_follow=stephen.disp_follow:main',
-            'mapped_disp_follow=stephen.mapped_disp_follow:main',
+            'mapped_disp_padded_follow=stephen.mapped_disp_padded_follow:main',
             'mapped_disp_line_follow=stephen.mapped_disp_line_follow:main',
             'mapped_disp_clothoid_follow=stephen.mapped_disp_clothoid_follow:main',
             'testing=stephen.testing:main',
