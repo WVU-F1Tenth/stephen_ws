@@ -62,7 +62,8 @@ params = KeyBindings(
     map_extension=Binding('map extension', 'e', 0.35),
     progress_k=Binding('progress gain', 'p', 1.0),
     cross_track_k=Binding('cross track error gain', 'c', 1.0),
-    steering_diff_k=Binding('steering difference gain', 'r', 1.0)
+    steering_diff_k=Binding('steering difference gain', 'r', 1.0),
+    dir_k=Binding('score direction gain', 'z', 0.2)
 )
 
 @dataclass
@@ -283,6 +284,7 @@ class DisparityFollow(Node):
                 - progress_k * progress
                 + cross_track_k * np.abs(cross_track_error)
                 + steering_diff_k * steering_diff
+                + params.dir_k.v * path.sign
             )
         #     print(path)
         #     print(f'{progress = }')

@@ -210,6 +210,15 @@ class Raceline:
         dy = self.y_ref - point[1]
         d = np.hypot(dx, dy)
         return np.argmin(d)
+    
+class Centerline:
+    def __init__(self, df, dtype=np.float32):
+        self.x_ref = df.iloc[:, 0].to_numpy(dtype=dtype)
+        self.y_ref = df.iloc[:, 1].to_numpy(dtype=dtype)
+    
+    def reverse(self):
+        self.x_ref = self.x_ref[::-1]
+        self.y_ref = self.y_ref[::-1]
 
 # def map_to_car(x, y, yaw, x_c, y_c, yaw_c):
 #     dx = x - x_c

@@ -16,7 +16,7 @@ from .io_utils import Binding, DualBinding, KeyBindings
 from .disp_utils import Scan, get_virtual, max_point_radius
 from pathlib import Path as FilePath
 import os
-from .utils import Raceline, quat_to_yaw, RacelineSpline, car_to_map
+from .utils import Raceline, quat_to_yaw, RacelineSpline, car_to_map, Centerline
 import pandas as pd
 
 
@@ -63,7 +63,8 @@ params = KeyBindings(
     progress_k=Binding('progress gain', 'p', 1.0),
     cross_track_k=Binding('cross track error gain', 'c', 1.0),
     steering_diff_k=Binding('steering difference gain', 'r', 1.0),
-    max_ext=Binding('max steering extension', 'h', 0.25)
+    max_ext=Binding('max steering extension', 'h', 0.25),
+    dir_k=Binding('score direction gain', 'z', 0.2)
 )
 
 @dataclass
@@ -94,16 +95,16 @@ class DisparityFollow(Node):
         self.keyboard_timer = self.create_timer(.2, params.check_input)
         self.print_timer = self.create_timer(1.0, self.print_info)
         self.line_marker_pub = self.create_publisher(Marker, '/viz/goal', 10)
-        # if config.publish_v1:
-        #     self.v1_pub = self.create_publisher(Float32MultiArray, '/v1_ranges', 10)
-        # if config.publish_v2:
-        #     self.v2_pub = self.create_publisher(Float32MultiArray, '/v2_ranges', 10)
-        # if config.publish_points1:
-        #     self.points1_pub = self.create_publisher(Marker, '/viz/points1', 10)
-        # if config.publish_points2:
-        #     self.points2_pub = self.create_publisher(Marker, '/viz/points2', 10)
-        # if config.publish_points3:
-        #     self.points3_pub = self.create_publisher(Marker, '/viz/points3', 10)
+        if config.publish_v1:
+            self.v1_pub = self.create_publisher(Float32MultiArray, '/v1_ranges', 10)
+        if config.publish_v2:
+            self.v2_pub = self.create_publisher(Float32MultiArray, '/v2_ranges', 10)
+        if config.publish_points1:
+            self.points1_pub = self.create_publisher(Marker, '/viz/points1', 10)
+        if config.publish_points2:
+            self.points2_pub = self.create_publisher(Marker, '/viz/points2', 10)
+        if config.publish_points3:
+            self.points3_pub = self.create_publisher(Marker, '/viz/points3', 10)
 
         df = pd.read_csv(CSV_PATH, header=0, comment='#', sep=';')
         self.raceline = Raceline(df)
@@ -292,6 +293,7 @@ class DisparityFollow(Node):
                 - progress_k * progress
                 + cross_track_k * np.abs(cross_track_error)
                 + steering_diff_k * steering_diff
+                + params.dir_k.v * path.sign
             )
         
         best_path = vpaths[np.argmin([path.score for path in vpaths])]
@@ -395,62 +397,62 @@ class DisparityFollow(Node):
             m.color = ColorRGBA(r=0.0, g=1.0, b=1.0, a=1.0)
             m.points = [p0, p1]
             self.line_marker_pub.publish(m)
-        # if config.publish_v1 and hasattr(self, 'v1'):
-        #     msg = Float32MultiArray()
-        #     msg.data = self.v1.tolist()
-        #     self.v1_pub.publish(msg)
-        # if config.publish_v2 and hasattr(self, 'v2'):
-        #     msg = Float32MultiArray()
-        #     msg.data = self.v2.tolist()
-        #     self.v2_pub.publish(msg)
-        # if config.publish_points1 and hasattr(self, 'paths'):
-        #     points1 = [Point(x=path.depth*math.cos(path.angle),
-        #                     y=path.depth*math.sin(path.angle),
-        #                     z=0.01) for path in self.paths]
-        #     m = Marker()
-        #     m.header.frame_id = '/ego_racecar/laser'
-        #     m.header.stamp = self.get_clock().now().to_msg()
-        #     m.ns = 'points1'
-        #     m.id = 0
-        #     m.type = Marker.POINTS
-        #     m.action = Marker.ADD
-        #     m.scale.x = 0.2
-        #     m.scale.y = 0.2
-        #     m.color = ColorRGBA(r=1.0, g=0.0, b=0.0, a=1.0)
-        #     m.points = points1
-        #     self.points1_pub.publish(m)
-        # if config.publish_points2 and hasattr(self, 'paths'):
-        #     points2 = [Point(x=path.vdepth*math.cos(path.vangle),
-        #                     y=path.vdepth*math.sin(path.vangle),
-        #                     z=0.01) for path in self.paths]
-        #     m = Marker()
-        #     m.header.frame_id = '/ego_racecar/laser'
-        #     m.header.stamp = self.get_clock().now().to_msg()
-        #     m.ns = 'points2'
-        #     m.id = 0
-        #     m.type = Marker.POINTS
-        #     m.action = Marker.ADD
-        #     m.scale.x = 0.2
-        #     m.scale.y = 0.2
-        #     m.color = ColorRGBA(r=0.0, g=1.0, b=0.0, a=1.0)
-        #     m.points = points2
-        #     self.points2_pub.publish(m)
-        # if config.publish_points3 and self.path is not None:
-        #     points3 = [Point(x=float(self.path.vdepth*np.cos(self.path.vangle)),
-        #                     y=float(self.path.vdepth*np.sin(self.path.vangle)),
-        #                     z=0.02)]
-        #     m = Marker()
-        #     m.header.frame_id = '/ego_racecar/laser'
-        #     m.header.stamp = self.get_clock().now().to_msg()
-        #     m.ns = 'points3'
-        #     m.id = 0
-        #     m.type = Marker.POINTS
-        #     m.action = Marker.ADD
-        #     m.scale.x = 0.2
-        #     m.scale.y = 0.2
-        #     m.color = ColorRGBA(r=0.0, g=0.0, b=1.0, a=1.0)
-        #     m.points = points3
-        #     self.points3_pub.publish(m)
+        if config.publish_v1 and hasattr(self, 'v1'):
+            msg = Float32MultiArray()
+            msg.data = self.v1.tolist()
+            self.v1_pub.publish(msg)
+        if config.publish_v2 and hasattr(self, 'v2'):
+            msg = Float32MultiArray()
+            msg.data = self.v2.tolist()
+            self.v2_pub.publish(msg)
+        if config.publish_points1 and hasattr(self, 'paths'):
+            points1 = [Point(x=path.depth*math.cos(path.angle),
+                            y=path.depth*math.sin(path.angle),
+                            z=0.01) for path in self.paths]
+            m = Marker()
+            m.header.frame_id = '/ego_racecar/laser'
+            m.header.stamp = self.get_clock().now().to_msg()
+            m.ns = 'points1'
+            m.id = 0
+            m.type = Marker.POINTS
+            m.action = Marker.ADD
+            m.scale.x = 0.2
+            m.scale.y = 0.2
+            m.color = ColorRGBA(r=1.0, g=0.0, b=0.0, a=1.0)
+            m.points = points1
+            self.points1_pub.publish(m)
+        if config.publish_points2 and hasattr(self, 'paths'):
+            points2 = [Point(x=path.vdepth*math.cos(path.vangle),
+                            y=path.vdepth*math.sin(path.vangle),
+                            z=0.01) for path in self.paths]
+            m = Marker()
+            m.header.frame_id = '/ego_racecar/laser'
+            m.header.stamp = self.get_clock().now().to_msg()
+            m.ns = 'points2'
+            m.id = 0
+            m.type = Marker.POINTS
+            m.action = Marker.ADD
+            m.scale.x = 0.2
+            m.scale.y = 0.2
+            m.color = ColorRGBA(r=0.0, g=1.0, b=0.0, a=1.0)
+            m.points = points2
+            self.points2_pub.publish(m)
+        if config.publish_points3 and self.path is not None:
+            points3 = [Point(x=float(self.path.vdepth*np.cos(self.path.vangle)),
+                            y=float(self.path.vdepth*np.sin(self.path.vangle)),
+                            z=0.02)]
+            m = Marker()
+            m.header.frame_id = '/ego_racecar/laser'
+            m.header.stamp = self.get_clock().now().to_msg()
+            m.ns = 'points3'
+            m.id = 0
+            m.type = Marker.POINTS
+            m.action = Marker.ADD
+            m.scale.x = 0.2
+            m.scale.y = 0.2
+            m.color = ColorRGBA(r=0.0, g=0.0, b=1.0, a=1.0)
+            m.points = points3
+            self.points3_pub.publish(m)
 
 def main(args=None):
     rclpy.init(args=args)

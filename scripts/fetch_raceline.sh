@@ -17,6 +17,17 @@ if [[ -z "$HOME/stephen_ws/src/stephen/data/maps/$1/$1" ]]; then
     return 1
 fi
 
+CENTERLINE_DEST="$HOME/stephen_ws/src/stephen/data/maps/$1/${1}_centerline.csv"
+CENTERLINE_SRC="$HOME/raceline-optimization/inputs/tracks/$1.csv"
+
+{
+    cp "$CENTERLINE_SRC" "$CENTERLINE_DEST"
+    echo 'Centerline fetched'
+} || {
+    echo "Error: Failed to fetch centerline"
+    return 1
+}
+
 RACELINE_DEST="$HOME/stephen_ws/src/stephen/data/maps/$1/${1}_raceline.csv"
 RACELINE_SRC="$HOME/raceline-optimization/outputs/$1/${1}_raceline.csv"
 
@@ -26,7 +37,7 @@ if [[ ! -f "$RACELINE_SRC" ]]; then
 fi
 
 cp "$RACELINE_SRC" "$RACELINE_DEST" || {
-    echo "Error: failed to fetch raceline"
+    echo "Error: Failed to fetch raceline"
     return 1
     }
 
